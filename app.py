@@ -6,7 +6,7 @@ import os
 import shutil
 import unicodedata
 from db import init_db, migrate_add_internal_ids, migrate_phase3_add_columns, migrate_phase4_add_columns, migrate_phase5_add_columns, get_inventory_rows, insert_inventory_row, insert_receipt_row, get_pending_receipts, get_next_receipt_id, update_receipt_status, get_next_unit_id, update_inventory_status, update_inventory_location, insert_history, get_history_rows, get_master_items, insert_master_item, get_master_items_with_order, update_master_sort_orders, deactivate_master_item, get_item_patterns, insert_item_pattern, get_next_process_lot_id, insert_process_lot, get_process_lots
-from services import ProcessingService, ReceiptService, ShippingService, InventoryService, MasterService, AuthService, QRCodeService, AuditLogService
+from services import ProcessingService, ReceiptService, ShippingService, InventoryService, MasterService, AuthService, AuditLogService
 from datetime import date, datetime
 from collections import defaultdict
 
@@ -203,7 +203,6 @@ menu = st.sidebar.radio(
         "バックアップ",
         "マスタ管理",
         "加工ロット一覧",
-        "QRコード生成",  # Phase 5
         "ユーザー管理",  # Phase 5
         "監査ログ",      # Phase 5
         "⚙️ ユーザー設定",  # Phase 5.1：ユーザー設定
