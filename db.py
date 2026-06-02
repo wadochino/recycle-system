@@ -295,7 +295,7 @@ def init_db():
         """)
 
         conn.commit()
-        print("✓ Database initialized successfully")
+        print("[OK] Database initialized successfully")
 
 def migrate_phase5_add_columns():
     """Phase 5 マイグレーション"""
