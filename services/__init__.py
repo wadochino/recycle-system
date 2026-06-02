@@ -14,7 +14,6 @@ from .site_service import SiteService
 from .cost_allocation_service import CostAllocationService
 from .sales_service import SalesService
 from .profit_service import ProfitService
-from .qrcode_service import QRCodeService
 from .auth_service import AuthService
 from .audit_log_service import AuditLogService
 
@@ -30,7 +29,6 @@ __all__ = [
     'CostAllocationService',
     'SalesService',
     'ProfitService',
-    'QRCodeService',
     'AuthService',
     'AuditLogService',
 ]
