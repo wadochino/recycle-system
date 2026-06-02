@@ -28,12 +28,6 @@ receipt_headers = [
 ]
 move_log_headers = ["日付", "在庫単位ID", "移動前", "移動後", "備考"]
 
-materials = get_master_items("materials")
-colors = get_master_items("colors")
-shapes = get_master_items("shapes")
-packages = get_master_items("packages")
-locations = get_master_items("locations")
-
 def make_new_id(rows, package):
     prefix_map = {
         "フレコン": "FC",
@@ -62,6 +56,7 @@ migrate_phase3_add_columns()  # Phase 3: マスタテーブルを作成
 migrate_phase4_add_columns()  # Phase 4: 原価・売上テーブルを作成
 migrate_phase5_add_columns()  # Phase 5: ユーザー・監査ログテーブルを作成
 
+# DB初期化後にマスタアイテムを取得
 # 初期マスタ登録
 default_masters = {
     "materials": ["PP", "PE", "PET", "ABS", "HDPE", "その他"],
