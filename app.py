@@ -287,31 +287,34 @@ menu_options = [
     "⚙️ ユーザー設定",  # Phase 5.1：ユーザー設定
 ]
 
-# メニュー選択状態を復元
-default_index = 0
-if hasattr(st.session_state, 'selected_menu') and st.session_state.selected_menu in menu_options:
-    default_index = menu_options.index(st.session_state.selected_menu)
+# メニュー選択状態を初期化
+if 'selected_menu' not in st.session_state:
+    st.session_state.selected_menu = menu_options[0]
+
+def update_menu():
+    """メニュー選択時のコールバック"""
+    st.session_state.selected_menu = menu
 
 menu = st.sidebar.radio(
     "📋 メニュー",
     menu_options,
-    index=default_index
+    index=menu_options.index(st.session_state.selected_menu),
+    on_change=update_menu,
+    key="menu_radio"
 )
 
-# 選択されたメニューをセッション状態とファイルに保存
-if not hasattr(st.session_state, 'selected_menu') or menu != st.session_state.selected_menu:
-    st.session_state.selected_menu = menu
-    saved_session = load_session_state()
-    if saved_session:
-        saved_session['selected_menu'] = menu
-        save_session_state(saved_session)
-    else:
-        save_session_state({
-            'logged_in': st.session_state.logged_in,
-            'username': st.session_state.username,
-            'user_info': st.session_state.user_info,
-            'selected_menu': menu
-        })
+# メニュー選択状態をファイルに保存
+saved_session = load_session_state()
+if saved_session:
+    saved_session['selected_menu'] = st.session_state.selected_menu
+    save_session_state(saved_session)
+else:
+    save_session_state({
+        'logged_in': st.session_state.logged_in,
+        'username': st.session_state.username,
+        'user_info': st.session_state.user_info,
+        'selected_menu': st.session_state.selected_menu
+    })
 
 # ==========================
 # 予定登録
