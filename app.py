@@ -691,7 +691,7 @@ elif menu == "加工登録":
     status_text = " | ".join([f"{s}({c})" for s, c in sorted(status_counter.items())])
     st.markdown(f"**全在庫：{len(rows)}件**  \n{status_text}")
 
-    active_rows = [r for r in rows if r["状態"] not in ["加工済", "出荷済"]]
+    active_rows = [r for r in rows if r["状態"] not in ["加工済", "出荷済", "誤登録", "廃棄", "返品"]]
 
     if not active_rows:
         st.warning("加工できる在庫がありません。")
