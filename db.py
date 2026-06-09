@@ -1,10 +1,10 @@
 """
 データベース層
 PostgreSQL 対応版（Render + Streamlit Cloud 用）
+psycopg 3.x 対応
 """
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
 from contextlib import contextmanager
 import os
 
@@ -13,8 +13,8 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 
 @contextmanager
 def get_conn():
-    """PostgreSQL コンテキストマネージャー"""
-    conn = psycopg2.connect(DATABASE_URL)
+    """PostgreSQL コンテキストマネージャー（psycopg 3.x）"""
+    conn = psycopg.connect(DATABASE_URL, autocommit=False)
     try:
         yield conn
     finally:
@@ -326,7 +326,7 @@ def migrate_add_internal_ids():
 def get_inventory_rows():
     """在庫一覧を取得"""
     with get_conn() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor(row_factory=psycopg.rows.dict_row)
         cur.execute("""
             SELECT
                 unit_id, internal_id, customer, material, color, shape, package,
@@ -416,7 +416,7 @@ def insert_receipt_row(row):
 def get_pending_receipts():
     """予定済み受付を取得"""
     with get_conn() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor(row_factory=psycopg.rows.dict_row)
         cur.execute("SELECT * FROM receipts WHERE status = '予定' ORDER BY receipt_date DESC")
         rows = cur.fetchall()
 
@@ -534,7 +534,7 @@ def insert_history(unit_id, operation, details=""):
 def get_history_rows():
     """履歴を取得"""
     with get_conn() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor(row_factory=psycopg.rows.dict_row)
         cur.execute("SELECT * FROM history ORDER BY created_at DESC")
         rows = cur.fetchall()
 
@@ -572,7 +572,7 @@ def insert_master_item(category, name):
 def get_master_items_with_order(category):
     """ソート順付きマスタアイテムを取得"""
     with get_conn() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor(row_factory=psycopg.rows.dict_row)
         cur.execute("SELECT name, sort_order FROM masters WHERE category = %s AND is_active = 1 ORDER BY sort_order", (category,))
         return cur.fetchall()
 
@@ -595,7 +595,7 @@ def deactivate_master_item(category, name):
 def get_item_patterns(category=None):
     """アイテムパターンを取得"""
     with get_conn() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor(row_factory=psycopg.rows.dict_row)
         if category:
             cur.execute("SELECT * FROM item_patterns WHERE category = %s AND is_active = 1 ORDER BY sort_order", (category,))
         else:
@@ -632,7 +632,7 @@ def insert_process_lot(lot_id, process_date, inputs, outputs, loss_kg, loss_rate
 def get_shipped_inventory():
     """出荷済み在庫（出荷実績）を取得"""
     with get_conn() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor(row_factory=psycopg.rows.dict_row)
         cur.execute("SELECT * FROM inventory WHERE status = '出荷済' ORDER BY updated_at DESC")
         rows = cur.fetchall()
 
@@ -659,7 +659,7 @@ def get_shipped_inventory():
 def get_process_lots():
     """処理ロット一覧を取得"""
     with get_conn() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor(row_factory=psycopg.rows.dict_row)
         cur.execute("SELECT * FROM process_lots ORDER BY created_at DESC")
         rows = cur.fetchall()
 
