@@ -278,7 +278,7 @@ default_index = 0
 if hasattr(st.session_state, 'selected_menu') and st.session_state.selected_menu in menu_options:
     default_index = menu_options.index(st.session_state.selected_menu)
 
-menu = st.sidebar.selectbox(
+menu = st.sidebar.radio(
     "📋 メニュー",
     menu_options,
     index=default_index
