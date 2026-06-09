@@ -345,7 +345,8 @@ def get_inventory_rows():
                 unit_id, internal_id, customer, material, color, shape, package,
                 weight_kg, location, status, notes, cost_amount,
                 datetime(created_at, '+9 hours') as created_at,
-                datetime(updated_at, '+9 hours') as updated_at
+                datetime(updated_at, '+9 hours') as updated_at,
+                updated_by
             FROM inventory
             ORDER BY created_at ASC
         """)
@@ -366,7 +367,8 @@ def get_inventory_rows():
             'notes': '備考',
             'created_at': '日付',
             'updated_at': '更新日時',
-            'cost_amount': '原価金額'
+            'cost_amount': '原価金額',
+            'updated_by': '更新者'
         }
 
         return [{col_map.get(k, k): v for k, v in row.items()} for row in rows]
