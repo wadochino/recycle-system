@@ -48,7 +48,7 @@ class ShippingService:
                     # 出荷済ステータスに更新
                     cur.execute("""
                         UPDATE inventory
-                        SET status = ?, note = ?
+                        SET status = ?, notes = ?
                         WHERE unit_id = ?
                     """, (
                         "出荷済",
@@ -58,20 +58,16 @@ class ShippingService:
 
                     # 出荷履歴を記録
                     cur.execute("""
-                        INSERT INTO inventory_history (
-                            date,
+                        INSERT INTO history (
                             unit_id,
-                            action,
-                            detail,
-                            weight_kg
+                            operation,
+                            details
                         )
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?)
                     """, (
-                        str(ship_date),
                         unit_id,
                         "出荷",
-                        f"出荷先:{destination} / {note}",
-                        0
+                        f"出荷先:{destination} / {note}"
                     ))
 
                 conn.commit()

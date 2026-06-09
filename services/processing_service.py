@@ -32,6 +32,8 @@ class ProcessingService:
         new_status,
         output_weights,
         note="",
+        processing_weight=None,
+        unprocessed_weight=None,
     ):
         """
         加工処理を実行（トランザクション管理）
@@ -84,7 +86,7 @@ class ProcessingService:
                 for src in selected_rows:
                     cur.execute("""
                         UPDATE inventory
-                        SET status = ?, note = ?
+                        SET status = ?, notes = ?
                         WHERE unit_id = ?
                     """, (
                         "加工済",
@@ -94,20 +96,16 @@ class ProcessingService:
 
                     # 投入履歴を記録
                     cur.execute("""
-                        INSERT INTO inventory_history (
-                            date,
+                        INSERT INTO history (
                             unit_id,
-                            action,
-                            detail,
-                            weight_kg
+                            operation,
+                            details
                         )
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?)
                     """, (
-                        datetime.now().strftime("%Y-%m-%d"),
                         src["在庫単位ID"],
                         "加工投入",
-                        f"{process}へ投入 / 加工後ID:{','.join(new_ids)}",
-                        int(src["重量kg"])
+                        f"{process}へ投入 / 加工後ID:{','.join(new_ids)}"
                     ))
 
                 # 4. 加工後在庫を作成
@@ -118,54 +116,46 @@ class ProcessingService:
 
                     cur.execute("""
                         INSERT INTO inventory (
-                            date,
+                            unit_id,
+                            internal_id,
                             customer,
                             material,
                             color,
                             shape,
                             package,
-                            unit_id,
-                            parent_id,
                             weight_kg,
                             location,
                             status,
-                            note,
-                            internal_id
+                            notes
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        datetime.now().strftime("%Y-%m-%d"),
+                        new_id,
+                        ",".join(source_ids),
                         source["取引先"],
                         source["樹脂"],
                         source["色"],
                         new_shape,
                         new_package,
-                        new_id,
-                        ",".join(source_ids),
                         int(w),
                         new_location,
                         new_status,
-                        f"工程:{process} / 投入:{len(selected_rows)}件 / {note}",
-                        internal_id  # 内部IDを保存
+                        f"工程:{process} / 投入:{len(selected_rows)}件 / {note}"
                     ))
 
                     # 加工完了履歴を記録
                     loss_weight = source_weight - output_weight
                     cur.execute("""
-                        INSERT INTO inventory_history (
-                            date,
+                        INSERT INTO history (
                             unit_id,
-                            action,
-                            detail,
-                            weight_kg
+                            operation,
+                            details
                         )
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?)
                     """, (
-                        datetime.now().strftime("%Y-%m-%d"),
                         new_id,
                         "加工完了",
-                        f"{process} / 投入:{len(selected_rows)}件 / ロス:{loss_weight}kg / {w}kg",
-                        int(w)
+                        f"{process} / 投入:{len(selected_rows)}件 / ロス:{loss_weight}kg / {w}kg"
                     ))
 
                 # 5. 加工ロットを作成
@@ -176,14 +166,14 @@ class ProcessingService:
                 cur.execute("""
                     INSERT INTO process_lots (
                         lot_id,
-                        date,
+                        process_date,
                         process,
                         input_ids,
                         output_ids,
                         input_weight,
                         output_weight,
                         loss_weight,
-                        note,
+                        notes,
                         internal_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -199,6 +189,43 @@ class ProcessingService:
                     note,
                     lot_internal_id  # 内部IDを保存
                 ))
+
+                # 未加工分の処理
+                if unprocessed_weight and unprocessed_weight > 0:
+                    # インデックスを加工後ユニット数の次の番号にして重複を避ける
+                    unprocessed_id = get_next_unit_id(source["荷姿"], len(output_weights))
+                    cur.execute("""
+                        INSERT INTO inventory (
+                            unit_id, internal_id, customer, material, color, shape,
+                            package, weight_kg, location, status, notes
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        unprocessed_id,
+                        ",".join(source_ids),  # 親IDは投入在庫の unit_id リスト（加工後在庫と同じ）
+                        source["取引先"],
+                        source["樹脂"],
+                        source["色"],
+                        source["形状"],
+                        source["荷姿"],
+                        int(unprocessed_weight),
+                        source["保管場所"],
+                        source["状態"],
+                        f"加工ロット{lot_id}から未加工分として自動作成"
+                    ))
+
+                    # 未加工分の履歴記録
+                    cur.execute("""
+                        INSERT INTO history (
+                            unit_id,
+                            operation,
+                            details
+                        )
+                        VALUES (?, ?, ?)
+                    """, (
+                        unprocessed_id,
+                        "未加工在庫作成",
+                        f"加工ロット{lot_id}の未加工分 {unprocessed_weight}kg"
+                    ))
 
                 conn.commit()
 

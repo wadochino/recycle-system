@@ -1,0 +1,1424 @@
+﻿import base64
+import urllib.parse
+import streamlit as st
+import csv
+import os
+import shutil
+import unicodedata
+from db import init_db, migrate_add_internal_ids, migrate_phase3_add_columns, migrate_phase4_add_columns, migrate_phase5_add_columns, get_inventory_rows, insert_inventory_row, insert_receipt_row, get_pending_receipts, get_next_receipt_id, update_receipt_status, get_next_unit_id, update_inventory_status, update_inventory_location, insert_history, get_history_rows, get_master_items, insert_master_item, get_master_items_with_order, update_master_sort_orders, deactivate_master_item, get_item_patterns, insert_item_pattern, get_next_process_lot_id, insert_process_lot, get_process_lots
+from services import ProcessingService, ReceiptService, ShippingService, InventoryService, MasterService, AuthService, AuditLogService
+from datetime import date, datetime
+from collections import defaultdict
+
+def read_csv(file, fieldnames):
+    if not os.path.exists(file):
+        return []
+
+    with open(file, newline="", encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+headers = [
+    "譌･莉・, "蜿門ｼ募・", "讓ｹ閼・, "濶ｲ", "蠖｢迥ｶ", "闕ｷ蟋ｿ",
+    "蝨ｨ蠎ｫ蜊倅ｽ巧D", "隕ｪID", "驥埼㍼kg", "菫晉ｮ｡蝣ｴ謇", "迥ｶ諷・, "蛯呵・
+]
+
+receipt_headers = [
+    "蜿嶺ｻ露D", "譌･莉・, "蜿門ｼ募・", "讓ｹ閼・, "濶ｲ", "蠖｢迥ｶ",
+    "闕ｷ蟋ｿ", "莠亥ｮ壽焚驥・, "菫晉ｮ｡蝣ｴ謇", "迥ｶ諷・
+]
+move_log_headers = ["譌･莉・, "蝨ｨ蠎ｫ蜊倅ｽ巧D", "遘ｻ蜍募燕", "遘ｻ蜍募ｾ・, "蛯呵・]
+
+materials = get_master_items("materials")
+colors = get_master_items("colors")
+shapes = get_master_items("shapes")
+packages = get_master_items("packages")
+locations = get_master_items("locations")
+
+def make_new_id(rows, package):
+    prefix_map = {
+        "繝輔Ξ繧ｳ繝ｳ": "FC",
+        "繝｡繝・す繝･繝懊ャ繧ｯ繧ｹ": "MB",
+        "繧ｫ繧ｴ": "KG",
+        "繝代Ξ繝・ヨ遨阪∩": "PL",
+        "邏呵｢・: "BG",
+        "繝ｭ繝ｼ繝ｫ": "RL",
+        "縺昴・莉・: "OT",
+    }
+    prefix = prefix_map.get(package, "OT")
+    return f"{prefix}-{len(rows) + 1:04d}"
+
+
+def safe_int(value):
+    try:
+        # 庁 蜈ｨ隗呈焚蟄励ｄ繧ｹ繝壹・繧ｹ縺悟性縺ｾ繧後※縺・※繧ょ濠隗偵↓豁｣隕丞喧縺励※蜃ｦ逅・☆繧九ｈ縺・ｼｷ蛹・
+        normalized = unicodedata.normalize("NFKC", str(value)).strip()
+        return int(float(normalized))
+    except:
+        return 0
+
+init_db()
+migrate_add_internal_ids()  # Phase 2: 蜀・ΚID繧ｫ繝ｩ繝繧定ｿｽ蜉
+migrate_phase3_add_columns()  # Phase 3: 繝槭せ繧ｿ繝・・繝悶Ν繧剃ｽ懈・
+migrate_phase4_add_columns()  # Phase 4: 蜴滉ｾ｡繝ｻ螢ｲ荳翫ユ繝ｼ繝悶Ν繧剃ｽ懈・
+migrate_phase5_add_columns()  # Phase 5: 繝ｦ繝ｼ繧ｶ繝ｼ繝ｻ逶｣譟ｻ繝ｭ繧ｰ繝・・繝悶Ν繧剃ｽ懈・
+
+# 蛻晄悄繝槭せ繧ｿ逋ｻ骭ｲ
+default_masters = {
+    "materials": ["PP", "PE", "PET", "ABS", "HDPE", "縺昴・莉・],
+    "colors": ["N", "Z", "髱・, "鮟・, "繧ｰ繝ｬ繝ｼ", "逋ｽ", "騾乗・", "縺昴・莉・],
+    "shapes": ["繝ｩ繝ｳ繝翫・", "繝輔ぅ繝ｫ繝", "謌仙ｽ｢蜩・, "邊臥・, "繝壹Ξ繝・ヨ", "繝ｭ繝ｼ繝ｫ", "繝励Ξ繧ｹ蜩・, "縺昴・莉・],
+    "packages": ["繝輔Ξ繧ｳ繝ｳ", "繝｡繝・す繝･繝懊ャ繧ｯ繧ｹ", "繧ｫ繧ｴ", "繝代Ξ繝・ヨ遨阪∩", "邏呵｢・, "繝ｭ繝ｼ繝ｫ", "縺昴・莉・],
+    "locations": ["隨ｬ1蟾･蝣ｴ", "隨ｬ2蟾･蝣ｴ", "蛟牙ｺｫ", "蜃ｺ闕ｷ繝､繝ｼ繝・],
+}
+
+for category, names in default_masters.items():
+    for name in names:
+        insert_master_item(category, name)
+
+materials = get_master_items("materials")
+colors = get_master_items("colors")
+shapes = get_master_items("shapes")
+packages = get_master_items("packages")
+locations = get_master_items("locations")
+
+# ==========================
+# Phase 5: 繝ｦ繝ｼ繧ｶ繝ｼ隱崎ｨｼ
+# ==========================
+
+# 繧ｻ繝・す繝ｧ繝ｳ迥ｶ諷九・蛻晄悄蛹・
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = None
+    st.session_state.user_info = None
+
+# 繝ｭ繧ｰ繧､繝ｳ逕ｻ髱｢
+if not st.session_state.logged_in:
+    st.title("蝨ｨ蠎ｫ邂｡逅・す繧ｹ繝・Β - 繝ｭ繧ｰ繧､繝ｳ")
+
+    st.subheader("繝ｭ繧ｰ繧､繝ｳ")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        tab1, tab2 = st.tabs(["繝ｭ繧ｰ繧､繝ｳ", "繝ｦ繝ｼ繧ｶ繝ｼ菴懈・"])
+
+        with tab1:
+            username = st.text_input("繝ｦ繝ｼ繧ｶ繝ｼ蜷・)
+            password = st.text_input("繝代せ繝ｯ繝ｼ繝・, type="password")
+
+            if st.button("繝ｭ繧ｰ繧､繝ｳ"):
+                user = AuthService.authenticate(username, password)
+
+                if user:
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.session_state.user_info = user
+
+                    # 逶｣譟ｻ繝ｭ繧ｰ繧定ｨ倬鹸
+                    AuditLogService.log_action(
+                        username=username,
+                        action="LOGIN",
+                        detail="繝ｦ繝ｼ繧ｶ繝ｼ縺後Ο繧ｰ繧､繝ｳ縺励∪縺励◆"
+                    )
+
+                    st.success(f"繝ｭ繧ｰ繧､繝ｳ縺励∪縺励◆・嘴user['full_name']}")
+                    st.rerun()
+                else:
+                    st.error("繝ｦ繝ｼ繧ｶ繝ｼ蜷阪∪縺溘・繝代せ繝ｯ繝ｼ繝峨′豁｣縺励￥縺ゅｊ縺ｾ縺帙ｓ")
+
+                    # 螟ｱ謨励Ο繧ｰ繧定ｨ倬鹸
+                    AuditLogService.log_error(
+                        username=username,
+                        action="LOGIN_FAILED",
+                        error_message="繝ｭ繧ｰ繧､繝ｳ螟ｱ謨・
+                    )
+
+        with tab2:
+            st.subheader("譁ｰ隕上Θ繝ｼ繧ｶ繝ｼ菴懈・")
+
+            new_username = st.text_input("繝ｦ繝ｼ繧ｶ繝ｼ蜷・, key="new_user")
+            new_password = st.text_input("繝代せ繝ｯ繝ｼ繝・, type="password", key="new_pass")
+            new_password_confirm = st.text_input("繝代せ繝ｯ繝ｼ繝牙・蜈･蜉・, type="password", key="new_pass_confirm")
+            new_full_name = st.text_input("繝輔Ν繝阪・繝")
+            new_email = st.text_input("繝｡繝ｼ繝ｫ繧｢繝峨Ξ繧ｹ")
+
+            if st.button("繝ｦ繝ｼ繧ｶ繝ｼ菴懈・"):
+                if not new_username:
+                    st.error("繝ｦ繝ｼ繧ｶ繝ｼ蜷阪ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞")
+                elif len(new_password) < 6:
+                    st.error("繝代せ繝ｯ繝ｼ繝峨・6譁・ｭ嶺ｻ･荳翫〒縺・)
+                elif new_password != new_password_confirm:
+                    st.error("繝代せ繝ｯ繝ｼ繝峨′荳閾ｴ縺励∪縺帙ｓ")
+                else:
+                    result = AuthService.register_user(
+                        new_username,
+                        new_password,
+                        new_full_name,
+                        new_email
+                    )
+
+                    if result['success']:
+                        st.success(result['message'])
+                    else:
+                        st.error(result['message'])
+
+    st.stop()
+
+# 繝ｭ繧ｰ繧､繝ｳ貂医∩縺ｮ蝣ｴ蜷医√Γ繧､繝ｳ繧｢繝励Μ繧ｱ繝ｼ繧ｷ繝ｧ繝ｳ
+st.title("蝨ｨ蠎ｫ邂｡逅・す繧ｹ繝・Β")
+
+# 繝ｦ繝ｼ繧ｶ繝ｼ諠・ｱ繝代ロ繝ｫ
+col1, col2, col3 = st.columns([2, 2, 1])
+
+with col1:
+    st.write(f"側 {st.session_state.user_info['full_name']}")
+
+with col3:
+    if st.button("繝ｭ繧ｰ繧｢繧ｦ繝・):
+        # 逶｣譟ｻ繝ｭ繧ｰ繧定ｨ倬鹸
+        AuditLogService.log_action(
+            username=st.session_state.username,
+            action="LOGOUT",
+            detail="繝ｦ繝ｼ繧ｶ繝ｼ縺後Ο繧ｰ繧｢繧ｦ繝医＠縺ｾ縺励◆"
+        )
+
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.session_state.user_info = None
+        st.rerun()
+
+menu = st.sidebar.radio(
+    "繝｡繝九Η繝ｼ",
+    [
+        "莠亥ｮ夂匳骭ｲ",
+        "險磯㍼逋ｻ骭ｲ",
+        "蝨ｨ蠎ｫ荳隕ｧ",
+        "蜉蟾･逋ｻ骭ｲ",
+        "蜃ｺ闕ｷ逋ｻ骭ｲ",
+        "蝨ｨ蠎ｫ遘ｻ蜍・,
+        "迥ｶ諷句､画峩",
+        "繝ｩ繝吶Ν蜊ｰ蛻ｷ",
+        "繝代ち繝ｼ繝ｳ逋ｻ骭ｲ",
+        "螻･豁ｴ荳隕ｧ",
+        "繝舌ャ繧ｯ繧｢繝・・",
+        "繝槭せ繧ｿ邂｡逅・,
+        "蜉蟾･繝ｭ繝・ヨ荳隕ｧ",
+        "QR繧ｳ繝ｼ繝臥函謌・,  # Phase 5
+        "繝ｦ繝ｼ繧ｶ繝ｼ邂｡逅・,  # Phase 5
+        "逶｣譟ｻ繝ｭ繧ｰ",      # Phase 5
+        "笞呻ｸ・繝ｦ繝ｼ繧ｶ繝ｼ險ｭ螳・,  # Phase 5.1・壹Θ繝ｼ繧ｶ繝ｼ險ｭ螳・
+    ]
+)
+
+# ==========================
+# 莠亥ｮ夂匳骭ｲ
+# ==========================
+if menu == "莠亥ｮ夂匳骭ｲ":
+    st.header("莠亥ｮ夂匳骭ｲ・亥燕譌･蜈･蜉幢ｼ・)
+
+    receipt_date = st.date_input("譌･莉・, value=date.today())
+    customer = st.text_input("蜿門ｼ募・繧ｳ繝ｼ繝・)
+
+    material = st.selectbox("讓ｹ閼・, materials)
+    package = st.selectbox("闕ｷ蟋ｿ", packages)
+
+    planned_qty = st.number_input("莠亥ｮ壽焚驥・, min_value=1, value=3)
+    location = st.text_input("菫晉ｮ｡莠亥ｮ壼ｴ謇")
+
+    if st.button("莠亥ｮ夂匳骭ｲ"):
+
+        new_id = get_next_receipt_id()
+
+        new_row = {
+            "蜿嶺ｻ露D": new_id,
+            "譌･莉・: str(receipt_date),
+            "蜿門ｼ募・": customer,
+            "讓ｹ閼・: material,
+            "濶ｲ": "",
+            "蠖｢迥ｶ": "",
+            "闕ｷ蟋ｿ": package,
+            "莠亥ｮ壽焚驥・: str(planned_qty),
+            "菫晉ｮ｡蝣ｴ謇": location,
+            "迥ｶ諷・: "莠亥ｮ・,
+        }
+
+        insert_receipt_row(new_row)
+
+        st.success(f"逋ｻ骭ｲ縺励∪縺励◆・嘴new_id}")
+
+# ==========================
+# 險磯㍼逋ｻ骭ｲ
+# ==========================
+elif menu == "險磯㍼逋ｻ骭ｲ":
+    st.header("險磯㍼逋ｻ骭ｲ・育樟蝣ｴ逕ｨ・・)
+
+    pending = get_pending_receipts()
+
+    st.subheader("莠亥ｮ壹↑縺励〒逋ｻ骭ｲ")
+
+    if st.checkbox("莠亥ｮ壹ｒ菴ｿ繧上★逶ｴ謗･逋ｻ骭ｲ縺吶ｋ"):
+        customer = st.text_input("蜿門ｼ募・繧ｳ繝ｼ繝会ｼ域焔蜈･蜉幢ｼ・)
+        material = st.selectbox("讓ｹ閼・, materials, key="free_material")
+        color = st.selectbox("濶ｲ", colors, key="free_color")
+        shape = st.selectbox("蠖｢迥ｶ", shapes, key="free_shape")
+        package = st.selectbox("闕ｷ蟋ｿ", packages, key="free_package")
+        location = st.text_input("菫晉ｮ｡蝣ｴ謇")
+
+        st.subheader("驥埼㍼蜈･蜉幢ｼ域隼陦後〒蛹ｺ蛻・ｋ・・)
+
+        weight_text = st.text_area(
+            "驥埼㍼繧・陦後★縺､蜈･蜉帙＠縺ｦ縺上□縺輔＞",
+            placeholder="萓・\n500\n800\n200",
+            key="free_weight_text"
+        )
+
+        weights = []
+        if weight_text:
+            for line in weight_text.split("\n"):
+                if line.strip():
+                    w = safe_int(line)  # 庁 safe_int 繧帝壹☆縺薙→縺ｧ蜈ｨ隗呈焚蟄励・隱､蜈･蜉帙ｒ謨第ｸ・
+                    if w > 0:
+                        weights.append(w)
+
+        st.write(f"蜈･蜉帑ｻｶ謨ｰ・嘴len(weights)}莉ｶ / 蜷郁ｨ・{sum(weights)} kg")
+
+        if st.button("險磯㍼逋ｻ骭ｲ・井ｺ亥ｮ壹↑縺暦ｼ・):
+            if not customer:
+                st.error("蜿門ｼ募・繧ｳ繝ｼ繝峨ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞縲・)
+            elif sum(weights) <= 0:
+                st.error("驥埼㍼繧貞・蜉帙＠縺ｦ縺上□縺輔＞縲・)
+            else:
+                new_rows = []
+
+                for w in weights:
+                    new_id = get_next_unit_id(package, len(new_rows))
+
+                    new_rows.append({
+                        "譌･莉・: str(date.today()),
+                        "蜿門ｼ募・": customer,
+                        "讓ｹ閼・: material,
+                        "濶ｲ": color,
+                        "蠖｢迥ｶ": shape,
+                        "闕ｷ蟋ｿ": package,
+                        "蝨ｨ蠎ｫ蜊倅ｽ巧D": new_id,
+                        "隕ｪID": "",
+                        "驥埼㍼kg": str(w),
+                        "菫晉ｮ｡蝣ｴ謇": location,
+                        "迥ｶ諷・: "蜴滓侭蝨ｨ蠎ｫ",
+                        "蛯呵・: "莠亥ｮ壹↑縺礼匳骭ｲ"
+                    })
+
+                for r in new_rows:
+                    insert_inventory_row(r)
+
+                    insert_history(
+                        str(date.today()),
+                        r["蝨ｨ蠎ｫ蜊倅ｽ巧D"],
+                        "險磯㍼逋ｻ骭ｲ",
+                        f"{r['蜿門ｼ募・']} / {r['讓ｹ閼・]} / {r['驥埼㍼kg']}kg",
+                        r["驥埼㍼kg"]
+                    )
+
+                st.success(f"{len(new_rows)}莉ｶ逋ｻ骭ｲ縺励∪縺励◆縲・)
+
+    st.subheader("莠亥ｮ壹≠繧翫〒逋ｻ骭ｲ")
+
+    if not pending:
+        st.warning("莠亥ｮ壹′縺ゅｊ縺ｾ縺帙ｓ")
+    else:
+        options = [
+            f'{r["蜿嶺ｻ露D"]} / {r["蜿門ｼ募・"]} / {r["讓ｹ閼・]} / {r["闕ｷ蟋ｿ"]} / {r["莠亥ｮ壽焚驥・]}蛟・
+            for r in pending
+        ]
+
+        selected = st.selectbox("莠亥ｮ壹ｒ驕ｸ謚・, options)
+        rec = pending[options.index(selected)]
+
+        color = st.selectbox("濶ｲ", colors, key="planned_color")
+        shape = st.selectbox("蠖｢迥ｶ", shapes, key="planned_shape")
+
+        st.subheader("驥埼㍼蜈･蜉幢ｼ域隼陦後〒蛹ｺ蛻・ｋ・・)
+
+        weight_text = st.text_area(
+            "驥埼㍼繧・陦後★縺､蜈･蜉帙＠縺ｦ縺上□縺輔＞",
+            placeholder="萓・\n500\n800\n200",
+            key="planned_weight_text"
+        )
+
+        weights = []
+        if weight_text:
+            for line in weight_text.split("\n"):
+                if line.strip():
+                    w = safe_int(line)  # 庁 safe_int 繧帝壹☆縺薙→縺ｧ蜈ｨ隗呈焚蟄励・隱､蜈･蜉帙ｒ謨第ｸ・
+                    if w > 0:
+                        weights.append(w)
+
+        st.write(f"蜈･蜉帑ｻｶ謨ｰ・嘴len(weights)}莉ｶ / 蜷郁ｨ・{sum(weights)} kg")
+
+        if st.button("險磯㍼逋ｻ骭ｲ・九Λ繝吶Ν菴懈・"):
+            if sum(weights) <= 0:
+                st.error("驥埼㍼繧貞・蜉帙＠縺ｦ縺上□縺輔＞縲・)
+            else:
+                new_rows = []
+
+                for w in weights:
+                    new_id = get_next_unit_id(rec["闕ｷ蟋ｿ"], len(new_rows))
+
+                    new_rows.append({
+                        "譌･莉・: rec["譌･莉・],
+                        "蜿門ｼ募・": rec["蜿門ｼ募・"],
+                        "讓ｹ閼・: rec["讓ｹ閼・],
+                        "濶ｲ": color,
+                        "蠖｢迥ｶ": shape,
+                        "闕ｷ蟋ｿ": rec["闕ｷ蟋ｿ"],
+                        "蝨ｨ蠎ｫ蜊倅ｽ巧D": new_id,
+                        "隕ｪID": "",
+                        "驥埼㍼kg": str(w),
+                        "菫晉ｮ｡蝣ｴ謇": rec["菫晉ｮ｡蝣ｴ謇"],
+                        "迥ｶ諷・: "蜴滓侭蝨ｨ蠎ｫ",
+                        "蛯呵・: f"蜿嶺ｻ露D:{rec['蜿嶺ｻ露D']}"
+                    })
+
+                for r in new_rows:
+                    insert_inventory_row(r)
+
+                    insert_history(
+                        str(date.today()),
+                        r["蝨ｨ蠎ｫ蜊倅ｽ巧D"],
+                        "險磯㍼逋ｻ骭ｲ",
+                        f"{r['蜿門ｼ募・']} / {r['讓ｹ閼・]} / {r['驥埼㍼kg']}kg",
+                        r["驥埼㍼kg"]
+                    )
+
+                update_receipt_status(rec["蜿嶺ｻ露D"], "險磯㍼貂・)
+
+                st.success(f"{len(new_rows)}莉ｶ逋ｻ骭ｲ縺励∪縺励◆縲・)
+                st.info("蜊ｰ蛻ｷ縺吶ｋ蝣ｴ蜷医・縲∝ｷｦ繝｡繝九Η繝ｼ縺ｮ縲後Λ繝吶Ν蜊ｰ蛻ｷ縲阪°繧牙魂蛻ｷ縺励※縺上□縺輔＞縲・)
+
+# ==========================
+# 蝨ｨ蠎ｫ荳隕ｧ
+# ==========================
+elif menu == "蝨ｨ蠎ｫ荳隕ｧ":
+    st.header("蝨ｨ蠎ｫ荳隕ｧ")
+
+    rows = get_inventory_rows()
+    active_rows = [
+        r for r in rows
+        if r["迥ｶ諷・] in ["蜴滓侭蝨ｨ蠎ｫ", "邊臥募ｾ・■", "荳ｭ髢灘惠蠎ｫ", "陬ｽ蜩∝惠蠎ｫ"]
+    ]
+
+    if active_rows:
+        customers = sorted(set(r["蜿門ｼ募・"] for r in active_rows if r["蜿門ｼ募・"]))
+        locations_list = sorted(set(r["菫晉ｮ｡蝣ｴ謇"] for r in active_rows if r["菫晉ｮ｡蝣ｴ謇"]))
+        statuses = sorted(set(r["迥ｶ諷・] for r in active_rows if r["迥ｶ諷・]))
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            selected_customer = st.selectbox("蜿門ｼ募・", ["縺吶∋縺ｦ"] + customers)
+
+        with col2:
+            selected_location = st.selectbox("菫晉ｮ｡蝣ｴ謇", ["縺吶∋縺ｦ"] + locations_list)
+
+        with col3:
+            selected_status = st.selectbox("迥ｶ諷・, ["縺吶∋縺ｦ"] + statuses)
+
+        filtered = active_rows
+
+        if selected_customer != "縺吶∋縺ｦ":
+            filtered = [r for r in filtered if r["蜿門ｼ募・"] == selected_customer]
+
+        if selected_location != "縺吶∋縺ｦ":
+            filtered = [r for r in filtered if r["菫晉ｮ｡蝣ｴ謇"] == selected_location]
+
+        if selected_status != "縺吶∋縺ｦ":
+            filtered = [r for r in filtered if r["迥ｶ諷・] == selected_status]
+
+        st.dataframe(filtered, use_container_width=True)
+
+        total = sum(safe_int(r["驥埼㍼kg"]) for r in filtered)
+        st.subheader("陦ｨ遉ｺ荳ｭ縺ｮ髮・ｨ・)
+        st.write(f"蝨ｨ蠎ｫ蜊倅ｽ肴焚・嘴len(filtered)}")
+        st.write(f"邱城㍾驥擾ｼ嘴total:,} kg")
+
+        st.subheader("蜿門ｼ募・縺斐→縺ｮ蜷郁ｨ磯㍾驥・)
+        summary = defaultdict(int)
+        for r in active_rows:
+            summary[r["蜿門ｼ募・"]] += safe_int(r["驥埼㍼kg"])
+
+        st.dataframe(
+            [{"蜿門ｼ募・": k, "蜷郁ｨ磯㍾驥縮g": f"{v:,}"} for k, v in summary.items()],
+            use_container_width=True
+        )
+
+    else:
+        st.write("迴ｾ蝨ｨ蠎ｫ縺後≠繧翫∪縺帙ｓ縲・)
+
+# ==========================
+# 蜉蟾･逋ｻ骭ｲ
+# ==========================
+elif menu == "蜉蟾･逋ｻ骭ｲ":
+    st.header("蜉蟾･逋ｻ骭ｲ")
+
+    rows = get_inventory_rows()
+
+    from collections import Counter
+
+    st.write("蜈ｨ蝨ｨ蠎ｫ莉ｶ謨ｰ", len(rows))
+    st.write("迥ｶ諷句挨莉ｶ謨ｰ")
+    st.write(Counter([r["迥ｶ諷・] for r in rows]))
+
+    active_rows = [r for r in rows if r["迥ｶ諷・] not in ["蜉蟾･貂・, "蜃ｺ闕ｷ貂・]]
+
+    if not active_rows:
+        st.warning("蜉蟾･縺ｧ縺阪ｋ蝨ｨ蠎ｫ縺後≠繧翫∪縺帙ｓ縲・)
+    else:
+        options = [
+            f'{r["蝨ｨ蠎ｫ蜊倅ｽ巧D"]} / {r["蜿門ｼ募・"]} / {r["讓ｹ閼・]} / {r["蠖｢迥ｶ"]} / {r["驥埼㍼kg"]}kg / {r["迥ｶ諷・]}'
+            for r in active_rows
+        ]
+
+        selected_items = st.multiselect("蜉蟾･蟇ｾ雎｡", options)
+
+        selected_rows = []
+        for item in selected_items:
+            selected_rows.append(active_rows[options.index(item)])
+
+        if not selected_rows:
+            st.warning("蜉蟾･縺吶ｋ蝨ｨ蠎ｫ繧帝∈謚槭＠縺ｦ縺上□縺輔＞縲・)
+            st.stop()
+
+        source = selected_rows[0]
+        source_ids = [r["蝨ｨ蠎ｫ蜊倅ｽ巧D"] for r in selected_rows]
+        source_weight = sum(safe_int(r["驥埼㍼kg"]) for r in selected_rows)
+
+        st.subheader("蜉蟾･蜑肴ュ蝣ｱ")
+
+        source_table = [
+            {"鬆・岼": "蝨ｨ蠎ｫID", "蜀・ｮｹ": source["蝨ｨ蠎ｫ蜊倅ｽ巧D"]},
+            {"鬆・岼": "蜿門ｼ募・", "蜀・ｮｹ": source["蜿門ｼ募・"]},
+            {"鬆・岼": "讓ｹ閼・, "蜀・ｮｹ": source["讓ｹ閼・]},
+            {"鬆・岼": "濶ｲ", "蜀・ｮｹ": source["濶ｲ"]},
+            {"鬆・岼": "蠖｢迥ｶ", "蜀・ｮｹ": source["蠖｢迥ｶ"]},
+            {"鬆・岼": "闕ｷ蟋ｿ", "蜀・ｮｹ": source["闕ｷ蟋ｿ"]},
+            {"鬆・岼": "驥埼㍼kg", "蜀・ｮｹ": source["驥埼㍼kg"]},
+            {"鬆・岼": "菫晉ｮ｡蝣ｴ謇", "蜀・ｮｹ": source["菫晉ｮ｡蝣ｴ謇"]},
+            {"鬆・岼": "迥ｶ諷・, "蜀・ｮｹ": source["迥ｶ諷・]},
+        ]
+
+        st.write(f"謚募・謨ｰ・嘴len(selected_rows)}莉ｶ")
+        st.write(f"謚募・蜷郁ｨ磯㍾驥擾ｼ嘴source_weight:,} kg")
+        st.dataframe(selected_rows, use_container_width=True)
+
+        st.table(source_table)
+
+        st.subheader("蜉蟾･繝代ち繝ｼ繝ｳ")
+
+        pattern = st.selectbox(
+            "蜉蟾･繝代ち繝ｼ繝ｳ繧帝∈謚・,
+            [
+                "謇句虚縺ｧ驕ｸ縺ｶ",
+                "莉募・縺・竊・陬ｽ蜩∝惠蠎ｫ",
+                "莉募・縺・竊・邊臥募ｾ・■",
+                "邊臥・竊・荳ｭ髢灘惠蠎ｫ",
+                "邊臥・竊・陬ｽ蜩∝惠蠎ｫ",
+                "繝励Ξ繧ｹ 竊・陬ｽ蜩∝惠蠎ｫ",
+                "繝壹Ξ繝・ヨ蜉蟾･ 竊・陬ｽ蜩∝惠蠎ｫ",
+            ]
+        )
+
+        process = "縺昴・莉・
+        default_shape = shapes[0]
+        default_status = "荳ｭ髢灘惠蠎ｫ"
+
+        if pattern == "莉募・縺・竊・陬ｽ蜩∝惠蠎ｫ":
+            process = "莉募・縺・
+            default_shape = source["蠖｢迥ｶ"]
+            default_status = "陬ｽ蜩∝惠蠎ｫ"
+
+        elif pattern == "莉募・縺・竊・邊臥募ｾ・■":
+            process = "莉募・縺・
+            default_shape = source["蠖｢迥ｶ"]
+            default_status = "邊臥募ｾ・■"
+
+        elif pattern == "邊臥・竊・荳ｭ髢灘惠蠎ｫ":
+            process = "邊臥・
+            default_shape = "邊臥・
+            default_status = "荳ｭ髢灘惠蠎ｫ"
+
+        elif pattern == "邊臥・竊・陬ｽ蜩∝惠蠎ｫ":
+            process = "邊臥・
+            default_shape = "邊臥・
+            default_status = "陬ｽ蜩∝惠蠎ｫ"
+
+        elif pattern == "繝励Ξ繧ｹ 竊・陬ｽ蜩∝惠蠎ｫ":
+            process = "繝励Ξ繧ｹ"
+            default_shape = "繝励Ξ繧ｹ蜩・
+            default_status = "陬ｽ蜩∝惠蠎ｫ"
+
+        elif pattern == "繝壹Ξ繝・ヨ蜉蟾･ 竊・陬ｽ蜩∝惠蠎ｫ":
+            process = "繝壹Ξ繝・ヨ蜉蟾･"
+            default_shape = "繝壹Ξ繝・ヨ"
+            default_status = "陬ｽ蜩∝惠蠎ｫ"
+
+        if pattern == "謇句虚縺ｧ驕ｸ縺ｶ":
+            process = st.selectbox("蟾･遞・, ["莉募・縺・, "遐ｴ遐・, "邊臥・, "繝励Ξ繧ｹ", "繝壹Ξ繝・ヨ蜉蟾･", "縺昴・莉・])
+        else:
+            st.write(f"蟾･遞具ｼ嘴process}")
+
+        new_shape = st.selectbox(
+            "蜉蟾･蠕後・蠖｢迥ｶ",
+            shapes,
+            index=shapes.index(default_shape) if default_shape in shapes else 0
+        )
+
+        new_package = st.selectbox("蜉蟾･蠕後・闕ｷ蟋ｿ", packages)
+
+        new_location = st.text_input("蜉蟾･蠕後・菫晉ｮ｡蝣ｴ謇", value=source["菫晉ｮ｡蝣ｴ謇"])
+
+        new_status = st.selectbox(
+            "蜉蟾･蠕後・迥ｶ諷・,
+            ["邊臥募ｾ・■", "荳ｭ髢灘惠蠎ｫ", "陬ｽ蜩∝惠蠎ｫ"],
+            index=["邊臥募ｾ・■", "荳ｭ髢灘惠蠎ｫ", "陬ｽ蜩∝惠蠎ｫ"].index(default_status)
+        )
+
+        st.subheader("蜉蟾･蠕碁㍾驥丞・蜉幢ｼ域隼陦後〒蛹ｺ蛻・ｋ・・)
+
+        output_text = st.text_area(
+            "蜉蟾･蠕碁㍾驥上ｒ1陦後★縺､蜈･蜉帙＠縺ｦ縺上□縺輔＞",
+            placeholder="萓・\n500\n700\n600",
+            key="process_output_text"
+        )
+
+        output_weights = []
+
+        if output_text:
+            for line in output_text.split("\n"):
+                if line.strip():
+                    w = safe_int(line)  # 庁 縺薙％縺ｧ繧ょ・隗呈焚蟄励ｒ險ｱ螳ｹ
+                    if w > 0:
+                        output_weights.append(w)
+
+        output_weight = sum(output_weights)
+
+        st.write(f"蜉蟾･蠕悟区焚・嘴len(output_weights)}莉ｶ / 蜷郁ｨ・{output_weight:,} kg")
+
+        source_weight = sum(safe_int(r["驥埼㍼kg"]) for r in selected_rows)
+        loss_weight = source_weight - output_weight
+
+        st.info(f"蜉蟾･蜑搾ｼ嘴source_weight:,} kg")
+        st.info(f"蜉蟾･蠕鯉ｼ嘴output_weight:,} kg")
+        st.info(f"繝ｭ繧ｹ・嘴loss_weight:,} kg")
+
+        note = st.text_area("蛯呵・)
+
+        if st.button("蜉蟾･逋ｻ骭ｲ"):
+            if output_weight <= 0:
+                st.error("蜉蟾･蠕碁㍾驥上ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞縲・)
+            elif loss_weight < 0:
+                st.error("蜉蟾･蠕碁㍾驥上′蜉蟾･蜑埼㍾驥上ｒ雜・∴縺ｦ縺・∪縺吶・)
+            else:
+                # ProcessingService 繧剃ｽｿ逕ｨ縺励※繝医Λ繝ｳ繧ｶ繧ｯ繧ｷ繝ｧ繝ｳ邂｡逅・
+                result = ProcessingService.execute_processing(
+                    selected_rows=selected_rows,
+                    process=process,
+                    new_shape=new_shape,
+                    new_package=new_package,
+                    new_location=new_location,
+                    new_status=new_status,
+                    output_weights=output_weights,
+                    note=note,
+                )
+
+                if result['success']:
+                    st.success(f"蜉蟾･逋ｻ骭ｲ螳御ｺ・ゅΟ繝・ヨID・嘴result['lot_id']} / 譁ｰID・嘴', '.join(result['new_ids'])}")
+                else:
+                    st.error(result['message'])
+
+# ==========================
+# 蜃ｺ闕ｷ逋ｻ骭ｲ
+# ==========================
+elif menu == "蜃ｺ闕ｷ逋ｻ骭ｲ":
+    st.header("蜃ｺ闕ｷ逋ｻ骭ｲ")
+
+    rows = get_inventory_rows()
+    shippable_rows = [r for r in rows if r["迥ｶ諷・] == "陬ｽ蜩∝惠蠎ｫ"]
+
+    if not shippable_rows:
+        st.warning("蜃ｺ闕ｷ縺ｧ縺阪ｋ陬ｽ蜩∝惠蠎ｫ縺後≠繧翫∪縺帙ｓ縲・)
+    else:
+        options = [
+            f'{r["蝨ｨ蠎ｫ蜊倅ｽ巧D"]} / {r["蜿門ｼ募・"]} / {r["讓ｹ閼・]} / {r["蠖｢迥ｶ"]} / {r["驥埼㍼kg"]}kg / {r["菫晉ｮ｡蝣ｴ謇"]}'
+            for r in shippable_rows
+        ]
+
+        selected_items = st.multiselect("蜃ｺ闕ｷ縺吶ｋ蝨ｨ蠎ｫ繧帝∈謚・, options)
+
+        ship_date = st.date_input("蜃ｺ闕ｷ譌･", value=date.today())
+        destination = st.text_input("蜃ｺ闕ｷ蜈・)
+        note = st.text_area("蛯呵・)
+
+        selected_ids = []
+        total_weight = 0
+
+        for item in selected_items:
+            r = shippable_rows[options.index(item)]
+            selected_ids.append(r["蝨ｨ蠎ｫ蜊倅ｽ巧D"])
+            total_weight += safe_int(r["驥埼㍼kg"])
+
+        st.info(f"蜃ｺ闕ｷ蟇ｾ雎｡・嘴len(selected_ids)}莉ｶ / 蜷郁ｨ・{total_weight:,} kg")
+
+        if st.button("蜃ｺ闕ｷ逋ｻ骭ｲ"):
+            if not selected_ids:
+                st.error("蜃ｺ闕ｷ縺吶ｋ蝨ｨ蠎ｫ繧帝∈謚槭＠縺ｦ縺上□縺輔＞縲・)
+            elif not destination:
+                st.error("蜃ｺ闕ｷ蜈医ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞縲・)
+            else:
+                # ShippingService 繧剃ｽｿ逕ｨ縺励※繝医Λ繝ｳ繧ｶ繧ｯ繧ｷ繝ｧ繝ｳ邂｡逅・
+                result = ShippingService.register_shipping(
+                    selected_ids=selected_ids,
+                    ship_date=ship_date,
+                    destination=destination,
+                    note=note,
+                )
+
+                if result['success']:
+                    st.success(f"{result['count']}莉ｶ繧貞・闕ｷ逋ｻ骭ｲ縺励∪縺励◆縲ょ粋險・{total_weight:,} kg")
+                else:
+                    st.error(result['message'])
+
+# ==========================
+# 繝代ち繝ｼ繝ｳ逋ｻ骭ｲ
+# ==========================
+elif menu == "繝代ち繝ｼ繝ｳ逋ｻ骭ｲ":
+    st.header("繝代ち繝ｼ繝ｳ逋ｻ骭ｲ")
+
+    customer = st.text_input("蜿門ｼ募・繧ｳ繝ｼ繝・)
+
+    material = st.selectbox("讓ｹ閼・, materials)
+    color = st.selectbox("濶ｲ", colors)
+    shape = st.selectbox("蠖｢迥ｶ", shapes)
+    package = st.selectbox("闕ｷ蟋ｿ", packages)
+
+    if st.button("繝代ち繝ｼ繝ｳ菫晏ｭ・):
+        if not customer:
+            st.error("蜿門ｼ募・繧ｳ繝ｼ繝峨ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞縲・)
+        else:
+            insert_item_pattern({
+                "蜿門ｼ募・": customer,
+                "讓ｹ閼・: material,
+                "濶ｲ": color,
+                "蠖｢迥ｶ": shape,
+                "闕ｷ蟋ｿ": package
+            })
+            st.success("繝代ち繝ｼ繝ｳ逋ｻ骭ｲ縺励∪縺励◆縲・)
+
+    st.subheader("逋ｻ骭ｲ貂医∩繝代ち繝ｼ繝ｳ")
+    patterns = get_item_patterns()
+
+    if patterns:
+        st.dataframe(patterns, use_container_width=True)
+    else:
+        st.write("縺ｾ縺繝代ち繝ｼ繝ｳ縺後≠繧翫∪縺帙ｓ縲・)
+
+# ==========================
+# 蝨ｨ蠎ｫ遘ｻ蜍・
+# ==========================
+elif menu == "蝨ｨ蠎ｫ遘ｻ蜍・:
+    st.header("蝨ｨ蠎ｫ遘ｻ蜍包ｼ井ｸ諡ｬ遘ｻ蜍包ｼ・)
+
+    rows = get_inventory_rows()
+    active_rows = [r for r in rows if r["迥ｶ諷・] not in ["蜉蟾･貂・, "蜃ｺ闕ｷ貂・, "隱､逋ｻ骭ｲ", "蟒・｣・, "霑泌刀"]]
+
+    if not active_rows:
+        st.warning("遘ｻ蜍輔〒縺阪ｋ蝨ｨ蠎ｫ縺後≠繧翫∪縺帙ｓ縲・)
+    else:
+        dates = sorted(set(r["譌･莉・] for r in active_rows if r["譌･莉・]))
+        customers = sorted(set(r["蜿門ｼ募・"] for r in active_rows if r["蜿門ｼ募・"]))
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            selected_date = st.selectbox("蜈･闕ｷ譌･縺ｧ邨槭ｊ霎ｼ縺ｿ", ["縺吶∋縺ｦ"] + dates)
+
+        with col2:
+            selected_customer = st.selectbox("蜿門ｼ募・縺ｧ邨槭ｊ霎ｼ縺ｿ", ["縺吶∋縺ｦ"] + customers)
+
+        filtered = active_rows
+
+        if selected_date != "縺吶∋縺ｦ":
+            filtered = [r for r in filtered if r["譌･莉・] == selected_date]
+
+        if selected_customer != "縺吶∋縺ｦ":
+            filtered = [r for r in filtered if r["蜿門ｼ募・"] == selected_customer]
+
+        st.subheader("遘ｻ蜍募ｯｾ雎｡蛟呵｣・)
+        st.write(f"蛟呵｣應ｻｶ謨ｰ・嘴len(filtered)}莉ｶ")
+
+        if filtered:
+            st.dataframe(filtered, use_container_width=True)
+
+            options = [
+                f'{r["蝨ｨ蠎ｫ蜊倅ｽ巧D"]} / {r["蜿門ｼ募・"]} / {r["讓ｹ閼・]} / {r["蠖｢迥ｶ"]} / {r["驥埼㍼kg"]}kg / {r["菫晉ｮ｡蝣ｴ謇"]}'
+                for r in filtered
+            ]
+
+            selected_items = st.multiselect("遘ｻ蜍輔☆繧句惠蠎ｫ繧帝∈謚・, options)
+
+            selected_ids = []
+            total_weight = 0
+
+            for item in selected_items:
+                r = filtered[options.index(item)]
+                selected_ids.append(r["蝨ｨ蠎ｫ蜊倅ｽ巧D"])
+                total_weight += safe_int(r["驥埼㍼kg"])
+
+            st.info(f"驕ｸ謚樔ｸｭ・嘴len(selected_ids)}莉ｶ / 蜷郁ｨ・{total_weight:,} kg")
+
+            locations_list = [
+                "蜃ｺ闕ｷ繝､繝ｼ繝・,
+                "隨ｬ2蟾･蝣ｴ",
+                "蟇悟｣ｫ莠区･ｭ謇",
+                "蜈･螻ｱ轢ｬ蛟牙ｺｫ",
+                "萓晉伐讖句牙ｺｫ"
+            ]
+
+            new_location = st.selectbox("遘ｻ蜍募・", locations_list)
+            note = st.text_input("蛯呵・ｼ井ｻｻ諢擾ｼ・)
+
+            if st.button("荳諡ｬ遘ｻ蜍募ｮ溯｡・):
+                if not selected_ids:
+                    st.error("遘ｻ蜍輔☆繧句惠蠎ｫ繧帝∈謚槭＠縺ｦ縺上□縺輔＞縲・)
+                else:
+                    for r in rows:
+                        if r["蝨ｨ蠎ｫ蜊倅ｽ巧D"] in selected_ids:
+                            old_location = r["菫晉ｮ｡蝣ｴ謇"]
+
+                            update_inventory_location(
+                                r["蝨ｨ蠎ｫ蜊倅ｽ巧D"],
+                                new_location,
+                                f"遘ｻ蜍・ {old_location} 竊・{new_location} / {note}"
+                            )
+
+                            insert_history(
+                                str(date.today()),
+                                r["蝨ｨ蠎ｫ蜊倅ｽ巧D"],
+                                "蝨ｨ蠎ｫ遘ｻ蜍・,
+                                f"{old_location} 竊・{new_location} / {note}",
+                                r["驥埼㍼kg"]
+                            )
+
+                    st.success(f"{len(selected_ids)}莉ｶ繧・{new_location} 縺ｫ遘ｻ蜍輔＠縺ｾ縺励◆縲・)
+
+# ==========================
+# 迥ｶ諷句､画峩
+# ==========================
+elif menu == "迥ｶ諷句､画峩":
+    st.header("迥ｶ諷句､画峩")
+
+    rows = get_inventory_rows()
+
+    target_rows = [r for r in rows if r["迥ｶ諷・] not in ["蜉蟾･貂・, "蜃ｺ闕ｷ貂・, "隱､逋ｻ骭ｲ", "蟒・｣・, "霑泌刀"]]
+
+    if not target_rows:
+        st.warning("迥ｶ諷句､画峩縺ｧ縺阪ｋ蝨ｨ蠎ｫ縺後≠繧翫∪縺帙ｓ縲・)
+    else:
+        options = [
+            f'{r["蝨ｨ蠎ｫ蜊倅ｽ巧D"]} / {r["蜿門ｼ募・"]} / {r["讓ｹ閼・]} / {r["驥埼㍼kg"]}kg / {r["迥ｶ諷・]} / {r["菫晉ｮ｡蝣ｴ謇"]}'
+            for r in target_rows
+        ]
+
+        selected = st.selectbox("迥ｶ諷句､画峩縺吶ｋ蝨ｨ蠎ｫ繧帝∈謚・, options)
+        source = target_rows[options.index(selected)]
+
+        st.subheader("迴ｾ蝨ｨ縺ｮ諠・ｱ")
+        st.table([
+            {"鬆・岼": "蝨ｨ蠎ｫID", "蜀・ｮｹ": source["蝨ｨ蠎ｫ蜊倅ｽ巧D"]},
+            {"鬆・岼": "蜿門ｼ募・", "蜀・ｮｹ": source["蜿門ｼ募・"]},
+            {"鬆・岼": "讓ｹ閼・, "蜀・ｮｹ": source["讓ｹ閼・]},
+            {"鬆・岼": "驥埼㍼kg", "蜀・ｮｹ": source["驥埼㍼kg"]},
+            {"鬆・岼": "迴ｾ蝨ｨ迥ｶ諷・, "蜀・ｮｹ": source["迥ｶ諷・]},
+            {"鬆・岼": "菫晉ｮ｡蝣ｴ謇", "蜀・ｮｹ": source["菫晉ｮ｡蝣ｴ謇"]},
+        ])
+
+        new_status = st.selectbox("螟画峩蠕後・迥ｶ諷・, ["隱､逋ｻ骭ｲ", "蟒・｣・, "霑泌刀"])
+        note = st.text_area("逅・罰繝ｻ蛯呵・)
+
+        if st.button("迥ｶ諷句､画峩螳溯｡・):
+            if not note:
+                st.error("逅・罰繝ｻ蛯呵・ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞縲・)
+            else:
+                old_status = source["迥ｶ諷・]
+
+                update_inventory_status(
+                    source["蝨ｨ蠎ｫ蜊倅ｽ巧D"],
+                    new_status,
+                    f"迥ｶ諷句､画峩: {old_status} 竊・{new_status} / {note}"
+                )
+
+                insert_history(
+                    str(date.today()),
+                    source["蝨ｨ蠎ｫ蜊倅ｽ巧D"],
+                    "迥ｶ諷句､画峩",
+                    f"{old_status} 竊・{new_status} / {note}",
+                    source["驥埼㍼kg"]
+                )
+
+                st.success(f"{source['蝨ｨ蠎ｫ蜊倅ｽ巧D']} 繧・{new_status} 縺ｫ螟画峩縺励∪縺励◆縲・)
+
+# ==========================
+# 繝ｩ繝吶Ν蜊ｰ蛻ｷ・亥ｰら畑・・
+# ==========================
+elif menu == "繝ｩ繝吶Ν蜊ｰ蛻ｷ":
+    st.header("繝ｩ繝吶Ν蜊ｰ蛻ｷ・亥ｰら畑・・)
+
+    rows = get_inventory_rows()
+
+    active_rows = [r for r in rows if r["迥ｶ諷・] not in ["蜃ｺ闕ｷ貂・, "隱､逋ｻ骭ｲ", "蟒・｣・, "霑泌刀"]]
+
+    if not active_rows:
+        st.warning("蝨ｨ蠎ｫ縺後≠繧翫∪縺帙ｓ")
+    else:
+        options = [
+            f'{r["蝨ｨ蠎ｫ蜊倅ｽ巧D"]} / {r["蜿門ｼ募・"]} / {r["讓ｹ閼・]} / {r["驥埼㍼kg"]}kg'
+            for r in active_rows
+        ]
+
+        selected = st.multiselect("蜊ｰ蛻ｷ縺吶ｋ蝨ｨ蠎ｫ繧帝∈謚・, options)
+
+        selected_rows = []
+        for item in selected:
+            selected_rows.append(active_rows[options.index(item)])
+
+        st.write(f"驕ｸ謚樔ｸｭ・嘴len(selected_rows)}莉ｶ")
+
+        if selected_rows:
+            html = """
+            <html>
+            <head>
+            <meta charset="utf-8">
+            <style>
+            @page {
+                size: A4 portrait;
+                margin: 15mm;
+            }
+
+            body {
+                font-family: Arial, sans-serif;
+                margin: 0;
+            }
+
+            .label {
+                width: 100%;
+                height: 250mm;
+                border: 4px solid black;
+                padding: 20mm;
+                box-sizing: border-box;
+                page-break-after: always;
+            }
+
+            .label-id {
+                font-size: 72px;
+                font-weight: bold;
+                margin-bottom: 20mm;
+            }
+
+            .label-main {
+                font-size: 42px;
+                font-weight: bold;
+                margin-bottom: 12mm;
+            }
+
+            .label-sub {
+                font-size: 32px;
+                margin-bottom: 8mm;
+            }
+            </style>
+            </head>
+            <body>
+            """
+
+            for r in selected_rows:
+                html += f"""
+                <div class="label">
+                    <div class="label-id">{r["蝨ｨ蠎ｫ蜊倅ｽ巧D"]}</div>
+                    <div class="label-main">{r["蜿門ｼ募・"]} / {r["讓ｹ閼・]}</div>
+                    <div class="label-sub">濶ｲ・嘴r["濶ｲ"]}</div>
+                    <div class="label-sub">蠖｢迥ｶ・嘴r["蠖｢迥ｶ"]}</div>
+                    <div class="label-sub">驥埼㍼・嘴r["驥埼㍼kg"]} kg</div>
+                    <div class="label-sub">蝣ｴ謇・嘴r["菫晉ｮ｡蝣ｴ謇"]}</div>
+                </div>
+                """
+
+            html += """
+            </body>
+            </html>
+            """
+
+            # 庁 繧ｯ繝ｩ繧ｦ繝峨・繧ｵ繝ｼ繝舌・迺ｰ蠅・∈縺ｮ繝・・繝ｭ繧､繧定ｦ区紺縺医√Ο繝ｼ繧ｫ繝ｫ縺ｧ繝悶Λ繧ｦ繧ｶ繧帝幕縺丈ｻ墓ｧ倥°繧峨・
+            # 繝悶Λ繧ｦ繧ｶ邨檎罰縺ｧ縲悟魂蛻ｷ逕ｨHTML縲阪ｒ逶ｴ謗･繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨＆縺帙ｋ莉墓ｧ倥↓螳牙・蛹悶＠縺ｾ縺励◆縲・
+            st.success("蜊ｰ蛻ｷ逕ｨ繝・・繧ｿ縺檎函謌舌＆繧後∪縺励◆縲ゆｸ九・繝懊ち繝ｳ縺九ｉ蜿門ｾ励＠縺ｦ蜊ｰ蛻ｷ縺励※縺上□縺輔＞縲・)
+            st.download_button(
+                label="蜜・・蜊ｰ蛻ｷ逕ｨHTML繧偵ム繧ｦ繝ｳ繝ｭ繝ｼ繝・,
+                data=html,
+                file_name=f"labels_{datetime.now().strftime('%Y%m%d%H%M%S')}.html",
+                mime="text/html"
+            )
+
+# =========================
+# 螻･豁ｴ荳隕ｧ
+# =========================
+elif menu == "螻･豁ｴ荳隕ｧ":
+
+    st.header("螻･豁ｴ荳隕ｧ")
+
+    history_rows = get_history_rows()
+
+    if history_rows:
+        st.dataframe(history_rows, use_container_width=True)
+    else:
+        st.write("螻･豁ｴ縺ｯ縺ゅｊ縺ｾ縺帙ｓ縲・)
+
+# ==========================
+# 繝舌ャ繧ｯ繧｢繝・・
+# ==========================
+elif menu == "繝舌ャ繧ｯ繧｢繝・・":
+    st.header("繝舌ャ繧ｯ繧｢繝・・")
+
+    st.write("迴ｾ蝨ｨ縺ｮSQLite繝・・繧ｿ繝吶・繧ｹ繧偵ヰ繝・け繧｢繝・・縺励∪縺吶・)
+
+    if st.button("繝舌ャ繧ｯ繧｢繝・・菴懈・"):
+        backup_dir = "backups"
+
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = f"{backup_dir}/inventory_backup_{timestamp}.db"
+
+        shutil.copy("inventory.db", backup_file)
+
+        st.success("繝舌ャ繧ｯ繧｢繝・・繧剃ｽ懈・縺励∪縺励◆縲・)
+        st.write(backup_file)
+
+# ==========================
+# 繝槭せ繧ｿ邂｡逅・
+# ==========================
+elif menu == "繝槭せ繧ｿ邂｡逅・:
+    st.header("繝槭せ繧ｿ邂｡逅・)
+
+    categories = {
+        "讓ｹ閼・: "materials",
+        "濶ｲ": "colors",
+        "蠖｢迥ｶ": "shapes",
+        "闕ｷ蟋ｿ": "packages",
+        "菫晉ｮ｡蝣ｴ謇": "locations",
+        "蜿門ｼ募・": "customers",
+    }
+
+    selected_label = st.selectbox("繝槭せ繧ｿ遞ｮ蛻･", list(categories.keys()))
+    selected_category = categories[selected_label]
+
+    st.subheader(f"{selected_label} 縺ｮ霑ｽ蜉")
+
+    new_name = st.text_input("霑ｽ蜉縺吶ｋ蜷咲ｧｰ")
+
+    if st.button("霑ｽ蜉"):
+        if not new_name:
+            st.error("蜷咲ｧｰ繧貞・蜉帙＠縺ｦ縺上□縺輔＞縲・)
+        else:
+            insert_master_item(selected_category, new_name)
+            st.success(f"{selected_label} 縺ｫ {new_name} 繧定ｿｽ蜉縺励∪縺励◆縲・)
+
+    st.subheader(f"{selected_label} 荳隕ｧ")
+
+    items = get_master_items_with_order(selected_category)
+
+    if items:
+        order_dict = {}
+
+        for item in items:
+            name = item["name"]
+            current_order = int(item["sort_order"] or ((items.index(item) + 1) * 10))
+
+            col1, col2, col3 = st.columns([4, 2, 2])
+
+            with col1:
+                st.write(name)
+
+            with col2:
+                order = st.number_input(
+                    "陦ｨ遉ｺ鬆・,
+                    value=current_order,
+                    step=10,
+                    key=f"{selected_category}_{name}_order"
+                )
+
+            order_dict[name] = order
+
+            with col3:
+                if st.button("辟｡蜉ｹ蛹・, key=f"delete_{selected_category}_{name}"):
+                    deactivate_master_item(selected_category, name)
+                    st.success(f"{name} 繧堤┌蜉ｹ蛹悶＠縺ｾ縺励◆縲・)
+
+        if st.button("陦ｨ遉ｺ鬆・ｒ荳諡ｬ菫晏ｭ・):
+            update_master_sort_orders(selected_category, order_dict)
+            st.success("陦ｨ遉ｺ鬆・ｒ菫晏ｭ倥＠縺ｾ縺励◆縲ら判髱｢繧呈峩譁ｰ縺励※縺上□縺輔＞縲・)
+
+        if len(set(order_dict.values())) != len(order_dict):
+            st.error("陦ｨ遉ｺ鬆・′驥崎､・＠縺ｦ縺・∪縺吶・)
+
+# ==========================
+# 蜉蟾･繝ｭ繝・ヨ荳隕ｧ
+# ==========================
+elif menu == "蜉蟾･繝ｭ繝・ヨ荳隕ｧ":  # 庁 豁｣縺励＞螟夐㍾蛻・ｲ撰ｼ・lse 縺ｮ謇句燕・峨・髫主ｱ､縺ｫ菫ｮ豁｣縺励∪縺励◆
+
+    st.header("蜉蟾･繝ｭ繝・ヨ荳隕ｧ")
+
+    lots = get_process_lots()
+
+    if lots:
+        st.dataframe(lots, use_container_width=True)
+    else:
+        st.info("蜉蟾･繝ｭ繝・ヨ縺ｯ縺ゅｊ縺ｾ縺帙ｓ縲・)
+
+# ==========================
+# QR繧ｳ繝ｼ繝臥函謌撰ｼ・hase 5・・
+# ==========================
+elif menu == "QR繧ｳ繝ｼ繝臥函謌・:
+
+    st.header("QR繧ｳ繝ｼ繝臥函謌・)
+
+    st.subheader("蝨ｨ蠎ｫ蜊倅ｽ阪・QR繧ｳ繝ｼ繝臥函謌・)
+
+    # 蝨ｨ蠎ｫ荳隕ｧ縺九ｉ驕ｸ謚・
+    inventory_rows = get_inventory_rows()
+
+    if inventory_rows:
+        unit_ids = [row["蝨ｨ蠎ｫ蜊倅ｽ巧D"] for row in inventory_rows]
+
+        selected_unit_id = st.selectbox("蝨ｨ蠎ｫ蜊倅ｽ巧D繧帝∈謚・, unit_ids)
+
+        if st.button("QR繧ｳ繝ｼ繝臥函謌・):
+            try:
+                # QR繧ｳ繝ｼ繝峨ｒ逕滓・
+                qrcode_data = QRCodeService.generate_qrcode(selected_unit_id)
+
+                # QR繧ｳ繝ｼ繝画ュ蝣ｱ繧剃ｿ晏ｭ・
+                result = QRCodeService.save_qrcode_map(
+                    selected_unit_id,
+                    qrcode_data,
+                    qrcode_url=""
+                )
+
+                if result['success']:
+                    st.success(result['message'])
+
+                    # QR繧ｳ繝ｼ繝峨ｒ陦ｨ遉ｺ
+                    st.subheader("逕滓・縺輔ｌ縺櫺R繧ｳ繝ｼ繝・)
+
+                    # HTML縺ｧ陦ｨ遉ｺ
+                    html_img = QRCodeService.get_qrcode_html(selected_unit_id, size="300px")
+                    st.markdown(html_img, unsafe_allow_html=True)
+
+                    # 繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨・繧ｿ繝ｳ
+                    qrcode_info = QRCodeService.get_qrcode(selected_unit_id)
+
+                    if qrcode_info:
+                        import base64
+                        import io
+                        from PIL import Image
+
+                        # Base64繧偵ョ繧ｳ繝ｼ繝峨＠縺ｦPNG蛹・
+                        qrcode_bytes = base64.b64decode(qrcode_info['qrcode_data'])
+
+                        st.download_button(
+                            label="QR繧ｳ繝ｼ繝峨ｒ繝繧ｦ繝ｳ繝ｭ繝ｼ繝・,
+                            data=qrcode_bytes,
+                            file_name=f"qrcode_{selected_unit_id}.png",
+                            mime="image/png"
+                        )
+
+                    # 逶｣譟ｻ繝ｭ繧ｰ繧定ｨ倬鹸
+                    AuditLogService.log_action(
+                        username=st.session_state.username,
+                        action="GENERATE_QRCODE",
+                        table_name="qrcode_map",
+                        record_id=selected_unit_id,
+                        detail=f"QR繧ｳ繝ｼ繝峨ｒ逕滓・縺励∪縺励◆・嘴selected_unit_id}"
+                    )
+
+                else:
+                    st.error(result['message'])
+
+            except Exception as e:
+                st.error(f"繧ｨ繝ｩ繝ｼ・嘴str(e)}")
+
+                # 繧ｨ繝ｩ繝ｼ繝ｭ繧ｰ繧定ｨ倬鹸
+                AuditLogService.log_error(
+                    username=st.session_state.username,
+                    action="GENERATE_QRCODE",
+                    error_message=str(e)
+                )
+
+    else:
+        st.info("蝨ｨ蠎ｫ縺後≠繧翫∪縺帙ｓ縲・)
+
+# ==========================
+# 繝ｦ繝ｼ繧ｶ繝ｼ邂｡逅・ｼ・hase 5・・
+# ==========================
+elif menu == "繝ｦ繝ｼ繧ｶ繝ｼ邂｡逅・:
+
+    st.header("繝ｦ繝ｼ繧ｶ繝ｼ邂｡逅・)
+
+    tab1, tab2 = st.tabs(["繝ｦ繝ｼ繧ｶ繝ｼ菴懈・", "繝ｭ繝ｼ繝ｫ邂｡逅・])
+
+    with tab1:
+        st.subheader("譁ｰ隕上Θ繝ｼ繧ｶ繝ｼ菴懈・")
+
+        new_username = st.text_input("繝ｦ繝ｼ繧ｶ繝ｼ蜷・, key="admin_new_user")
+        new_password = st.text_input("繝代せ繝ｯ繝ｼ繝・, type="password", key="admin_new_pass")
+        new_full_name = st.text_input("繝輔Ν繝阪・繝", key="admin_full_name")
+        new_email = st.text_input("繝｡繝ｼ繝ｫ繧｢繝峨Ξ繧ｹ", key="admin_email")
+
+        if st.button("繝ｦ繝ｼ繧ｶ繝ｼ菴懈・", key="admin_create_user"):
+            if not new_username:
+                st.error("繝ｦ繝ｼ繧ｶ繝ｼ蜷阪ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞")
+            elif len(new_password) < 6:
+                st.error("繝代せ繝ｯ繝ｼ繝峨・6譁・ｭ嶺ｻ･荳翫〒縺・)
+            else:
+                result = AuthService.register_user(
+                    new_username,
+                    new_password,
+                    new_full_name,
+                    new_email
+                )
+
+                if result['success']:
+                    st.success(result['message'])
+
+                    # 逶｣譟ｻ繝ｭ繧ｰ繧定ｨ倬鹸
+                    AuditLogService.log_action(
+                        username=st.session_state.username,
+                        action="CREATE_USER",
+                        table_name="users",
+                        record_id=new_username,
+                        detail=f"繝ｦ繝ｼ繧ｶ繝ｼ繧剃ｽ懈・縺励∪縺励◆・嘴new_username}"
+                    )
+
+                else:
+                    st.error(result['message'])
+
+    with tab2:
+        st.subheader("繝ｭ繝ｼ繝ｫ蜑ｲ繧雁ｽ薙※")
+
+        # 繝ｦ繝ｼ繧ｶ繝ｼ繝ｪ繧ｹ繝医ｒ蜿門ｾ暦ｼ育ｰ｡譏灘ｮ溯｣・ｼ咼B縺九ｉ逶ｴ謗･蜿門ｾ暦ｼ・
+        from db import get_conn
+
+        with get_conn() as conn:
+            conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+            cur = conn.cursor()
+
+            cur.execute("SELECT username, full_name FROM users WHERE is_active = 1")
+            users = cur.fetchall()
+
+        if users:
+            user_options = {u['full_name']: u['username'] for u in users}
+
+            selected_user = st.selectbox("繝ｦ繝ｼ繧ｶ繝ｼ繧帝∈謚・, list(user_options.keys()))
+            selected_username = user_options[selected_user]
+
+            roles = ["蜿怜叙", "讀懈渊", "蜉蟾･", "蜃ｺ闕ｷ", "邂｡逅・, "admin"]
+
+            selected_role = st.selectbox("繝ｭ繝ｼ繝ｫ繧帝∈謚・, roles)
+
+            if st.button("繝ｭ繝ｼ繝ｫ蜑ｲ繧雁ｽ薙※"):
+                result = AuthService.assign_role(selected_username, selected_role)
+
+                if result['success']:
+                    st.success(result['message'])
+
+                    # 逶｣譟ｻ繝ｭ繧ｰ繧定ｨ倬鹸
+                    AuditLogService.log_action(
+                        username=st.session_state.username,
+                        action="ASSIGN_ROLE",
+                        table_name="user_roles",
+                        record_id=selected_username,
+                        detail=f"繝ｭ繝ｼ繝ｫ繧貞牡繧雁ｽ薙※縺ｾ縺励◆・嘴selected_username} = {selected_role}"
+                    )
+
+                else:
+                    st.error(result['message'])
+
+            # 迴ｾ蝨ｨ縺ｮ繝ｭ繝ｼ繝ｫ陦ｨ遉ｺ
+            st.subheader(f"{selected_user} 縺ｮ繝ｭ繝ｼ繝ｫ")
+
+            current_roles = AuthService.get_user_roles(selected_username)
+
+            if current_roles:
+                st.write(", ".join(current_roles))
+            else:
+                st.info("繝ｭ繝ｼ繝ｫ縺悟牡繧雁ｽ薙※繧峨ｌ縺ｦ縺・∪縺帙ｓ")
+
+        else:
+            st.info("繝ｦ繝ｼ繧ｶ繝ｼ縺後≠繧翫∪縺帙ｓ縲・)
+
+# ==========================
+# 逶｣譟ｻ繝ｭ繧ｰ・・hase 5・・
+# ==========================
+elif menu == "逶｣譟ｻ繝ｭ繧ｰ":
+
+    st.header("逶｣譟ｻ繝ｭ繧ｰ")
+
+    tab1, tab2 = st.tabs(["謫堺ｽ懊Ο繧ｰ", "邨ｱ險・])
+
+    with tab1:
+        st.subheader("謫堺ｽ懊Ο繧ｰ荳隕ｧ")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            filter_username = st.text_input("繝ｦ繝ｼ繧ｶ繝ｼ蜷阪〒繝輔ぅ繝ｫ繧ｿ・育ｩｺ逋ｽ縺ｧ蜈ｨ縺ｦ・・, key="audit_username")
+
+        with col2:
+            filter_action = st.text_input("繧｢繧ｯ繧ｷ繝ｧ繝ｳ・育ｩｺ逋ｽ縺ｧ蜈ｨ縺ｦ・・, key="audit_action")
+
+        if st.button("讀懃ｴ｢"):
+            logs = AuditLogService.get_audit_logs(
+                username=filter_username if filter_username else "",
+                action=filter_action if filter_action else "",
+                limit=200
+            )
+
+            if logs:
+                st.dataframe(logs, use_container_width=True)
+            else:
+                st.info("繝ｭ繧ｰ縺後≠繧翫∪縺帙ｓ縲・)
+
+    with tab2:
+        st.subheader("謫堺ｽ懃ｵｱ險・)
+
+        days = st.slider("驕主悉N譌･髢・, 1, 90, 30)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("謫堺ｽ懷挨髮・ｨ・)
+
+            summary = AuditLogService.get_action_summary(days=days)
+
+            if summary:
+                st.dataframe(summary, use_container_width=True)
+
+        with col2:
+            st.subheader("繧ｨ繝ｩ繝ｼ邨ｱ險・)
+
+            error_count = AuditLogService.get_error_count(days=days)
+
+            st.metric("繧ｨ繝ｩ繝ｼ莉ｶ謨ｰ", error_count)
+
+# ==========================
+# 繝ｦ繝ｼ繧ｶ繝ｼ險ｭ螳夲ｼ・hase 5.1・・
+# ==========================
+elif menu == "笞呻ｸ・繝ｦ繝ｼ繧ｶ繝ｼ險ｭ螳・:
+
+    st.header("繝ｦ繝ｼ繧ｶ繝ｼ險ｭ螳・)
+
+    tab1, tab2 = st.tabs(["繝代せ繝ｯ繝ｼ繝牙､画峩", "繝励Ο繝輔ぅ繝ｼ繝ｫ邱ｨ髮・])
+
+    with tab1:
+        st.subheader("繝代せ繝ｯ繝ｼ繝牙､画峩")
+
+        # 迴ｾ蝨ｨ縺ｮ繝ｦ繝ｼ繧ｶ繝ｼ諠・ｱ繧貞叙蠕・
+        current_user = AuthService.get_user(st.session_state.username)
+
+        if current_user:
+            st.write(f"繝ｦ繝ｼ繧ｶ繝ｼ蜷・ **{current_user['username']}**")
+            st.write(f"繝輔Ν繝阪・繝: {current_user['full_name']}")
+
+        st.divider()
+
+        old_password = st.text_input("迴ｾ蝨ｨ縺ｮ繝代せ繝ｯ繝ｼ繝・, type="password", key="old_pass")
+        new_password = st.text_input("譁ｰ縺励＞繝代せ繝ｯ繝ｼ繝・, type="password", key="new_pass")
+        new_password_confirm = st.text_input("譁ｰ縺励＞繝代せ繝ｯ繝ｼ繝会ｼ亥・蜈･蜉幢ｼ・, type="password", key="new_pass_confirm")
+
+        if st.button("繝代せ繝ｯ繝ｼ繝峨ｒ螟画峩"):
+            if not old_password:
+                st.error("迴ｾ蝨ｨ縺ｮ繝代せ繝ｯ繝ｼ繝峨ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞")
+            elif len(new_password) < 6:
+                st.error("譁ｰ縺励＞繝代せ繝ｯ繝ｼ繝峨・6譁・ｭ嶺ｻ･荳翫〒縺・)
+            elif new_password != new_password_confirm:
+                st.error("譁ｰ縺励＞繝代せ繝ｯ繝ｼ繝峨′荳閾ｴ縺励∪縺帙ｓ")
+            else:
+                result = AuthService.change_password(
+                    st.session_state.username,
+                    old_password,
+                    new_password
+                )
+
+                if result['success']:
+                    st.success(result['message'])
+
+                    # 逶｣譟ｻ繝ｭ繧ｰ繧定ｨ倬鹸
+                    AuditLogService.log_action(
+                        username=st.session_state.username,
+                        action="CHANGE_PASSWORD",
+                        table_name="users",
+                        record_id=st.session_state.username,
+                        detail="繝代せ繝ｯ繝ｼ繝峨ｒ螟画峩縺励∪縺励◆"
+                    )
+
+                else:
+                    st.error(result['message'])
+
+                    # 繧ｨ繝ｩ繝ｼ繝ｭ繧ｰ繧定ｨ倬鹸
+                    AuditLogService.log_error(
+                        username=st.session_state.username,
+                        action="CHANGE_PASSWORD",
+                        error_message=result['message']
+                    )
+
+    with tab2:
+        st.subheader("繝励Ο繝輔ぅ繝ｼ繝ｫ邱ｨ髮・)
+
+        # 迴ｾ蝨ｨ縺ｮ繝ｦ繝ｼ繧ｶ繝ｼ諠・ｱ繧貞叙蠕・
+        current_user = AuthService.get_user(st.session_state.username)
+
+        if current_user:
+            full_name = st.text_input("繝輔Ν繝阪・繝", value=current_user['full_name'], key="edit_full_name")
+            email = st.text_input("繝｡繝ｼ繝ｫ繧｢繝峨Ξ繧ｹ", value=current_user['email'] or "", key="edit_email")
+
+            if st.button("繝励Ο繝輔ぅ繝ｼ繝ｫ繧呈峩譁ｰ"):
+                result = AuthService.update_user_info(
+                    st.session_state.username,
+                    full_name=full_name,
+                    email=email
+                )
+
+                if result['success']:
+                    st.success(result['message'])
+
+                    # 繧ｻ繝・す繝ｧ繝ｳ迥ｶ諷九ｒ譖ｴ譁ｰ
+                    updated_user = AuthService.get_user(st.session_state.username)
+                    st.session_state.user_info = updated_user
+
+                    # 逶｣譟ｻ繝ｭ繧ｰ繧定ｨ倬鹸
+                    AuditLogService.log_action(
+                        username=st.session_state.username,
+                        action="UPDATE_PROFILE",
+                        table_name="users",
+                        record_id=st.session_state.username,
+                        detail=f"繝励Ο繝輔ぅ繝ｼ繝ｫ繧呈峩譁ｰ縺励∪縺励◆・医ヵ繝ｫ繝阪・繝: {full_name}・・
+                    )
+
+                    st.rerun()
+
+                else:
+                    st.error(result['message'])
+
+        else:
+            st.error("繝ｦ繝ｼ繧ｶ繝ｼ諠・ｱ繧貞叙蠕励〒縺阪∪縺帙ｓ")
+
+else:  # 庁 縺吶∋縺ｦ縺ｮ繝｡繝九Η繝ｼ譚｡莉ｶ縺九ｉ螟悶ｌ縺滄圀縺ｮ繧ｻ繝ｼ繝輔ユ繧｣繧ｬ繝ｼ繝峨→縺励※譛荳矩Κ縺ｫ驟咲ｽｮ
+    st.write("繝｡繝九Η繝ｼ繧帝∈謚槭＠縺ｦ縺上□縺輔＞縲・)
+
