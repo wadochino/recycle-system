@@ -498,26 +498,33 @@ def get_next_unit_id(package, count):
         next_num = db_count + count + 1
         return f"{prefix}-{year_month}-{next_num:04d}"
 
-def update_inventory_status(unit_id, status):
+def update_inventory_status(unit_id, status, updated_by=None):
     """在庫ステータスを更新"""
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("UPDATE inventory SET status = ? WHERE unit_id = ?", (status, unit_id))
+        if updated_by:
+            cur.execute("UPDATE inventory SET status = ?, updated_by = ? WHERE unit_id = ?", (status, updated_by, unit_id))
+        else:
+            cur.execute("UPDATE inventory SET status = ? WHERE unit_id = ?", (status, unit_id))
         conn.commit()
 
-def update_inventory_location(unit_id, location):
+def update_inventory_location(unit_id, location, updated_by=None):
     """在庫保管場所を更新"""
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("UPDATE inventory SET location = ? WHERE unit_id = ?", (location, unit_id))
+        if updated_by:
+            cur.execute("UPDATE inventory SET location = ?, updated_by = ? WHERE unit_id = ?", (location, updated_by, unit_id))
+        else:
+            cur.execute("UPDATE inventory SET location = ? WHERE unit_id = ?", (location, unit_id))
         conn.commit()
 
-def update_inventory_row_fields(unit_id, updates):
+def update_inventory_row_fields(unit_id, updates, updated_by=None):
     """在庫情報を更新（複数フィールド対応）
 
     Args:
         unit_id: 在庫単位ID
         updates: 更新する項目の辞書 {'customer': '新規', 'material': 'PE', ...}
+        updated_by: 更新者のユーザー名
     """
     if not updates:
         return
@@ -541,6 +548,11 @@ def update_inventory_row_fields(unit_id, updates):
         # 更新するカラムと値を構築
         set_clause = ", ".join([f"{col_map[jp_col]} = ?" for jp_col in updates.keys() if jp_col in col_map])
         values = [updates[jp_col] for jp_col in updates.keys() if jp_col in col_map]
+
+        # updated_by を追加
+        if updated_by:
+            set_clause += ", updated_by = ?"
+            values.append(updated_by)
 
         if set_clause:
             values.append(unit_id)
