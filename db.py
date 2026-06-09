@@ -14,7 +14,7 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 @contextmanager
 def get_conn():
     """PostgreSQL コンテキストマネージャー（psycopg 3.x）"""
-    conn = psycopg.connect(DATABASE_URL, autocommit=False)
+    conn = psycopg.connect(DATABASE_URL)
     try:
         yield conn
     finally:
