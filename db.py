@@ -319,6 +319,20 @@ def migrate_add_internal_ids():
     """内部IDマイグレーション"""
     print("[Migration] Internal ID columns already included in init_db()")
 
+def migrate_add_updated_by():
+    """updated_by カラムを追加"""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("ALTER TABLE inventory ADD COLUMN updated_by TEXT")
+            conn.commit()
+            print("[Migration] Added updated_by column to inventory table")
+        except Exception as e:
+            if "duplicate column name" in str(e) or "already exists" in str(e):
+                print("[Migration] updated_by column already exists")
+            else:
+                print(f"[Migration] Error: {e}")
+
 # ===== 既存の関数互換性 =====
 
 def get_inventory_rows():
