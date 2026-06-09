@@ -593,7 +593,7 @@ elif menu == "在庫一覧":
                 return [''] * len(row)
 
             styled_df = df.style.apply(highlight_rows, axis=1)
-            st.dataframe(styled_df, use_container_width=True)
+            st.dataframe(styled_df, use_container_width=True, hide_index=True)
         else:
             st.info("該当する在庫がありません。")
 
