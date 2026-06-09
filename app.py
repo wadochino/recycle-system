@@ -583,7 +583,17 @@ elif menu == "在庫一覧":
 
         # 表示
         if summary_data:
-            st.dataframe(summary_data, use_container_width=True)
+            # DataFrame に変換して、1行おきに色をつける
+            import pandas as pd
+            df = pd.DataFrame(summary_data)
+
+            def highlight_rows(row):
+                if row.name % 2 == 0:
+                    return ['background-color: #f0f7f4'] * len(row)
+                return [''] * len(row)
+
+            styled_df = df.style.apply(highlight_rows, axis=1)
+            st.dataframe(styled_df, use_container_width=True)
         else:
             st.info("該当する在庫がありません。")
 
