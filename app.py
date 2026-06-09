@@ -915,6 +915,7 @@ elif menu == "加工登録":
                     note=note,
                     processing_weight=processing_weight,  # 加工対象重量を追加
                     unprocessed_weight=unprocessed_weight,  # 未加工重量を追加
+                    updated_by=st.session_state.username
                 )
 
                 if result['success']:

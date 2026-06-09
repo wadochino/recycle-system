@@ -34,6 +34,7 @@ class ProcessingService:
         note="",
         processing_weight=None,
         unprocessed_weight=None,
+        updated_by=None,
     ):
         """
         加工処理を実行（トランザクション管理）
@@ -126,9 +127,10 @@ class ProcessingService:
                             weight_kg,
                             location,
                             status,
-                            notes
+                            notes,
+                            updated_by
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         new_id,
                         ",".join(source_ids),
@@ -140,7 +142,8 @@ class ProcessingService:
                         int(w),
                         new_location,
                         new_status,
-                        f"工程:{process} / 投入:{len(selected_rows)}件 / {note}"
+                        f"工程:{process} / 投入:{len(selected_rows)}件 / {note}",
+                        updated_by
                     ))
 
                     # 加工完了履歴を記録
@@ -197,8 +200,8 @@ class ProcessingService:
                     cur.execute("""
                         INSERT INTO inventory (
                             unit_id, internal_id, customer, material, color, shape,
-                            package, weight_kg, location, status, notes
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            package, weight_kg, location, status, notes, updated_by
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         unprocessed_id,
                         ",".join(source_ids),  # 親IDは投入在庫の unit_id リスト（加工後在庫と同じ）
@@ -210,7 +213,8 @@ class ProcessingService:
                         int(unprocessed_weight),
                         source["保管場所"],
                         source["状態"],
-                        f"加工ロット{lot_id}から未加工分として自動作成"
+                        f"加工ロット{lot_id}から未加工分として自動作成",
+                        updated_by
                     ))
 
                     # 未加工分の履歴記録
