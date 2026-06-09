@@ -20,6 +20,20 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# メニューのスタイルカスタマイズ
+st.markdown("""
+<style>
+    div[role="radiogroup"] {
+        font-size: 16px;
+        line-height: 2.5;
+    }
+    div[role="radiogroup"] label {
+        padding: 10px 15px;
+        cursor: pointer;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 def read_csv(file, fieldnames):
     if not os.path.exists(file):
         return []
