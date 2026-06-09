@@ -7,7 +7,7 @@ import shutil
 import unicodedata
 import plotly.express as px
 import plotly.graph_objects as go
-from db import init_db, migrate_add_internal_ids, migrate_phase3_add_columns, migrate_phase4_add_columns, migrate_phase5_add_columns, migrate_add_updated_by, get_inventory_rows, insert_inventory_row, insert_receipt_row, get_pending_receipts, get_next_receipt_id, update_receipt_status, get_next_unit_id, update_inventory_status, update_inventory_location, update_inventory_row_fields, insert_history, get_history_rows, get_master_items, insert_master_item, get_master_items_with_order, update_master_sort_orders, deactivate_master_item, get_item_patterns, insert_item_pattern, get_next_process_lot_id, insert_process_lot, get_process_lots, get_shipped_inventory, get_inventory_summary
+from db import init_db, migrate_add_internal_ids, migrate_phase3_add_columns, migrate_phase4_add_columns, migrate_phase5_add_columns, migrate_add_updated_by, migrate_add_history_username, get_inventory_rows, insert_inventory_row, insert_receipt_row, get_pending_receipts, get_next_receipt_id, update_receipt_status, get_next_unit_id, update_inventory_status, update_inventory_location, update_inventory_row_fields, insert_history, get_history_rows, get_master_items, insert_master_item, get_master_items_with_order, update_master_sort_orders, deactivate_master_item, get_item_patterns, insert_item_pattern, get_next_process_lot_id, insert_process_lot, get_process_lots, get_shipped_inventory, get_inventory_summary
 from services import ProcessingService, ReceiptService, ShippingService, InventoryService, MasterService, AuthService, AuditLogService
 from datetime import date, datetime
 from collections import defaultdict
@@ -59,6 +59,7 @@ migrate_phase3_add_columns()
 migrate_phase4_add_columns()
 migrate_phase5_add_columns()
 migrate_add_updated_by()
+migrate_add_history_username()
 
 materials = get_master_items("materials")
 colors = get_master_items("colors")

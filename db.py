@@ -333,6 +333,20 @@ def migrate_add_updated_by():
             else:
                 print(f"[Migration] Error: {e}")
 
+def migrate_add_history_username():
+    """history テーブルに username カラムを追加"""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("ALTER TABLE history ADD COLUMN username TEXT")
+            conn.commit()
+            print("[Migration] Added username column to history table")
+        except Exception as e:
+            if "duplicate column name" in str(e) or "already exists" in str(e):
+                print("[Migration] username column already exists")
+            else:
+                print(f"[Migration] Error: {e}")
+
 # ===== 既存の関数互換性 =====
 
 def get_inventory_rows():
@@ -562,12 +576,12 @@ def update_inventory_row_fields(unit_id, updates, updated_by=None):
             cur.execute(query, values)
             conn.commit()
 
-def insert_history(unit_id, operation, details=""):
+def insert_history(unit_id, operation, details="", username=None):
     """履歴を記録"""
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("INSERT INTO history (unit_id, operation, details) VALUES (?, ?, ?)",
-                   (unit_id, operation, details))
+        cur.execute("INSERT INTO history (unit_id, operation, details, username) VALUES (?, ?, ?, ?)",
+                   (unit_id, operation, details, username))
         conn.commit()
 
 def get_history_rows():
