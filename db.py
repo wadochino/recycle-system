@@ -470,9 +470,9 @@ def get_next_unit_id(package, count):
     }
     prefix = prefix_map.get(package, "OT")
 
-    # 現在の年号と月を取得
+    # 現在の西暦と月を取得
     now = datetime.now()
-    year = now.year - 2018  # 令和換算（2019年 = 1年）
+    year = now.year % 100  # 西暦の下2桁（26 = 2026年）
     month = now.month
     year_month = f"{year:02d}{month:02d}"
 
