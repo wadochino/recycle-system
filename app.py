@@ -7,7 +7,7 @@ import shutil
 import unicodedata
 import plotly.express as px
 import plotly.graph_objects as go
-from db import init_db, migrate_add_internal_ids, migrate_phase3_add_columns, migrate_phase4_add_columns, migrate_phase5_add_columns, migrate_add_updated_by, get_inventory_rows, insert_inventory_row, insert_receipt_row, get_pending_receipts, get_next_receipt_id, update_receipt_status, get_next_unit_id, update_inventory_status, update_inventory_location, update_inventory_row_fields, insert_history, get_history_rows, get_master_items, insert_master_item, get_master_items_with_order, update_master_sort_orders, deactivate_master_item, get_item_patterns, insert_item_pattern, get_next_process_lot_id, insert_process_lot, get_process_lots, get_shipped_inventory
+from db import init_db, migrate_add_internal_ids, migrate_phase3_add_columns, migrate_phase4_add_columns, migrate_phase5_add_columns, migrate_add_updated_by, get_inventory_rows, insert_inventory_row, insert_receipt_row, get_pending_receipts, get_next_receipt_id, update_receipt_status, get_next_unit_id, update_inventory_status, update_inventory_location, update_inventory_row_fields, insert_history, get_history_rows, get_master_items, insert_master_item, get_master_items_with_order, update_master_sort_orders, deactivate_master_item, get_item_patterns, insert_item_pattern, get_next_process_lot_id, insert_process_lot, get_process_lots, get_shipped_inventory, get_inventory_summary
 from services import ProcessingService, ReceiptService, ShippingService, InventoryService, MasterService, AuthService, AuditLogService
 from datetime import date, datetime
 from collections import defaultdict
@@ -535,6 +535,39 @@ elif menu == "在庫一覧":
             [{"取引先": k, "合計重量kg": f"{v:,}"} for k, v in summary.items()],
             use_container_width=True
         )
+
+        st.subheader("樹脂・色・形状ごとの合計重量")
+
+        # フィルター
+        col1, col2, col3 = st.columns(3)
+
+        materials_list = sorted(set(r["樹脂"] for r in active_rows if r["樹脂"]))
+        colors_list = sorted(set(r["色"] for r in active_rows if r["色"]))
+        shapes_list = sorted(set(r["形状"] for r in active_rows if r["形状"]))
+
+        with col1:
+            selected_material = st.selectbox("樹脂", ["すべて"] + materials_list, key="summary_material")
+        with col2:
+            selected_color = st.selectbox("色", ["すべて"] + colors_list, key="summary_color")
+        with col3:
+            selected_shape = st.selectbox("形状", ["すべて"] + shapes_list, key="summary_shape")
+
+        # 集計データを取得
+        summary_data = get_inventory_summary()
+
+        # フィルター適用
+        if selected_material != "すべて":
+            summary_data = [r for r in summary_data if r["樹脂"] == selected_material]
+        if selected_color != "すべて":
+            summary_data = [r for r in summary_data if r["色"] == selected_color]
+        if selected_shape != "すべて":
+            summary_data = [r for r in summary_data if r["形状"] == selected_shape]
+
+        # 表示
+        if summary_data:
+            st.dataframe(summary_data, use_container_width=True)
+        else:
+            st.info("該当する在庫がありません。")
 
     else:
         st.write("現在庫がありません。")

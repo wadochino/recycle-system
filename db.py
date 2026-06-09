@@ -699,6 +699,39 @@ def get_shipped_inventory():
 
         return [{col_map.get(k, k): v for k, v in row.items()} for row in rows]
 
+def get_inventory_summary(status_filter=None):
+    """樹脂・色・形状ごとの合計重量を取得"""
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        query = """
+            SELECT
+                material, color, shape,
+                SUM(weight_kg) as total_weight
+            FROM inventory
+            WHERE status NOT IN ('加工済', '出荷済', '誤登録', '廃棄', '返品')
+        """
+
+        if status_filter and status_filter != 'すべて':
+            query += f" AND status = '{status_filter}'"
+
+        query += " GROUP BY material, color, shape ORDER BY material, color, shape"
+
+        cur.execute(query)
+        rows = cur.fetchall()
+
+        # 結果を辞書に変換
+        result = []
+        for row in rows:
+            result.append({
+                '樹脂': row[0],
+                '色': row[1],
+                '形状': row[2],
+                '合計重量kg': int(row[3]) if row[3] else 0
+            })
+
+        return result
+
 def get_process_lots():
     """処理ロット一覧を取得"""
     with get_conn() as conn:
