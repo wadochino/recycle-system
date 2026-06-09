@@ -454,7 +454,11 @@ def update_receipt_status(receipt_id, status):
         conn.commit()
 
 def get_next_unit_id(package, count):
-    """次の在庫単位IDを取得（ループ内での連番対応）"""
+    """次の在庫単位IDを取得（ループ内での連番対応）
+    形式：荷姿-年号月-連番（例：FC-2606-0001）
+    """
+    from datetime import datetime
+
     prefix_map = {
         "フレコン": "FC",
         "メッシュボックス": "MB",
@@ -465,13 +469,20 @@ def get_next_unit_id(package, count):
         "その他": "OT",
     }
     prefix = prefix_map.get(package, "OT")
+
+    # 現在の年号と月を取得
+    now = datetime.now()
+    year = now.year - 2018  # 令和換算（2019年 = 1年）
+    month = now.month
+    year_month = f"{year:02d}{month:02d}"
+
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) as cnt FROM inventory WHERE package = ?", (package,))
         db_count = cur.fetchone()[0]
         # count パラメータ（ループ内インデックス）を使用して、一意な ID を生成
         next_num = db_count + count + 1
-        return f"{prefix}-{next_num:04d}"
+        return f"{prefix}-{year_month}-{next_num:04d}"
 
 def update_inventory_status(unit_id, status):
     """在庫ステータスを更新"""
