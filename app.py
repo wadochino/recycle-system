@@ -611,7 +611,7 @@ elif menu == "在庫編集":
 
         if st.button("保存"):
             if updates:
-                update_inventory_row_fields(target["在庫単位ID"], updates)
+                update_inventory_row_fields(target["在庫単位ID"], updates, st.session_state.username)
 
                 # 更新内容を文字列化
                 update_details = ", ".join([f"{k}: {target.get(k, '')} → {v}" for k, v in updates.items()])
@@ -1295,7 +1295,8 @@ elif menu == "在庫移動":
 
                             update_inventory_location(
                                 r["在庫単位ID"],
-                                new_location
+                                new_location,
+                                st.session_state.username
                             )
 
                             insert_history(
@@ -1348,7 +1349,8 @@ elif menu == "状態変更":
 
                 update_inventory_status(
                     source["在庫単位ID"],
-                    new_status
+                    new_status,
+                    st.session_state.username
                 )
 
                 insert_history(
